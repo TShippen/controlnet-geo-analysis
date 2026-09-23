@@ -58,6 +58,15 @@ def test_prompt_digest_is_stable_and_order_sensitive() -> None:
     assert len(first) == 8
 
 
+def test_prompt_digest_ignores_float_noise() -> None:
+    plain = RegionPrompt.from_lists(None, [0.0, 0.3]).digest()
+    negative_zero = RegionPrompt.from_lists(None, [-0.0, 0.3]).digest()
+    noisy = RegionPrompt.from_lists(None, [0.0, 0.1 + 0.2]).digest()
+
+    assert negative_zero == plain
+    assert noisy == plain
+
+
 def test_describe_region_reports_bbox_and_area() -> None:
     mask = np.zeros((8, 8), dtype=bool)
     mask[2:6, 1:5] = True

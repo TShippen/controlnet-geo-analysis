@@ -21,6 +21,7 @@ OVERLAY_COLOR = np.array([255, 80, 0], dtype=np.float32)
 OVERLAY_ALPHA = 0.45
 OUTLINE_COLOR = np.array([255, 255, 255], dtype=np.uint8)
 PROMPT_DIGEST_LENGTH = 8
+PROMPT_DECIMALS = 4
 
 
 class PromptError(ValueError):
@@ -38,6 +39,10 @@ class RegionPrompt:
     def from_lists(cls, box: list[float] | None, point: list[float] | None) -> "RegionPrompt":
         """Validate tool arguments and build a prompt.
 
+        Coordinates are rounded to ``PROMPT_DECIMALS`` places, which also maps
+        negative zero to zero, so prompts that differ only by float noise share
+        one cache entry.
+
         Raises:
             PromptError: When neither value is given, a list has the wrong length, a
                 coordinate is outside 0 to 1, or the box is not top-left to bottom-right.
@@ -50,7 +55,7 @@ class RegionPrompt:
             if len(box) != 4:
                 raise PromptError("box must have four values: [x0, y0, x1, y1].")
             _check_unit_range("box", box)
-            x0, y0, x1, y1 = (float(value) for value in box)
+            x0, y0, x1, y1 = (_normalize(value) for value in box)
             if x0 >= x1 or y0 >= y1:
                 raise PromptError("box must run from the top-left corner to the bottom-right.")
             validated_box = (x0, y0, x1, y1)
@@ -58,13 +63,18 @@ class RegionPrompt:
             if len(point) != 2:
                 raise PromptError("point must have two values: [x, y].")
             _check_unit_range("point", point)
-            validated_point = (float(point[0]), float(point[1]))
+            validated_point = (_normalize(point[0]), _normalize(point[1]))
         return cls(box=validated_box, point=validated_point)
 
     def digest(self) -> str:
         """Short stable identifier for cache file names."""
         canonical = f"box={self.box!r};point={self.point!r}"
         return hashlib.sha256(canonical.encode()).hexdigest()[:PROMPT_DIGEST_LENGTH]
+
+
+def _normalize(value: float) -> float:
+    """Round a coordinate and fold negative zero into zero."""
+    return round(float(value), PROMPT_DECIMALS) + 0.0
 
 
 def _check_unit_range(name: str, values: list[float]) -> None:

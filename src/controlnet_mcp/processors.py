@@ -80,6 +80,9 @@ class ProcessorSpec:
             optional region prompt and returns the RGB result plus a note.
         accepts_prompt: Whether the analysis needs a region prompt. Prompts are
             rejected for analyses that do not accept them.
+        version: Render version, part of every cache key. Bump it whenever the
+            output for the same inputs changes: a different checkpoint, a
+            changed detector default, or a change to how the result is drawn.
     """
 
     kind: str
@@ -88,6 +91,7 @@ class ProcessorSpec:
     build: Callable[[Path, torch.device], object]
     run: Callable[[object, Image.Image, int, RegionPrompt | None], AnalysisOutput]
     accepts_prompt: bool = False
+    version: str = "1"
 
     @property
     def requires_model(self) -> bool:

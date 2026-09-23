@@ -1,9 +1,10 @@
 """Content-addressed disk cache for rendered analyses.
 
 An analysis is identified by the digest of the source image bytes, the analysis
-name, the detect resolution, and an optional variant such as a prompt digest,
-so repeating a request costs a file read instead of a model run. Files live at
-``output_dir / <digest> / <kind>-<resolution>[-<variant>].png``.
+name, the processor's render version, the detect resolution, and an optional
+variant such as a prompt digest, so repeating a request costs a file read
+instead of a model run. Files live at
+``output_dir / <digest> / <kind>-v<version>-<resolution>[-<variant>].png``.
 """
 
 import hashlib
@@ -48,21 +49,33 @@ class AnalysisCache:
         """
         self.output_dir = output_dir
 
-    def path_for(self, digest: str, kind: str, resolution: int, variant: str | None = None) -> Path:
+    def path_for(
+        self,
+        digest: str,
+        kind: str,
+        version: str,
+        resolution: int,
+        variant: str | None = None,
+    ) -> Path:
         """Return the file path a rendered analysis occupies, whether or not it exists."""
         suffix = f"-{variant}" if variant else ""
-        return self.output_dir / digest / f"{kind}-{resolution}{suffix}.png"
+        return self.output_dir / digest / f"{kind}-v{version}-{resolution}{suffix}.png"
 
     def get(
-        self, digest: str, kind: str, resolution: int, variant: str | None = None
+        self,
+        digest: str,
+        kind: str,
+        version: str,
+        resolution: int,
+        variant: str | None = None,
     ) -> bytes | None:
         """Read a cached analysis.
 
         Returns:
             The stored PNG bytes, or None when the analysis has not been rendered
-            at this resolution and variant.
+            at this version, resolution, and variant.
         """
-        path = self.path_for(digest, kind, resolution, variant)
+        path = self.path_for(digest, kind, version, resolution, variant)
         if not path.is_file():
             logger.debug(
                 "Cache miss for image %s, analysis %s at resolution %d", digest, kind, resolution
@@ -82,6 +95,7 @@ class AnalysisCache:
         self,
         digest: str,
         kind: str,
+        version: str,
         resolution: int,
         png_bytes: bytes,
         variant: str | None = None,
@@ -91,11 +105,12 @@ class AnalysisCache:
         Args:
             digest: Digest of the source image bytes.
             kind: Analysis name, for example ``depth``.
+            version: The processor's render version.
             resolution: Detect resolution the analysis was rendered at.
             png_bytes: Encoded PNG to store.
             variant: Extra key component, for example a prompt digest.
         """
-        path = self.path_for(digest, kind, resolution, variant)
+        path = self.path_for(digest, kind, version, resolution, variant)
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".tmp", delete=False) as handle:
             temporary = Path(handle.name)

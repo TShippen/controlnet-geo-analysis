@@ -96,8 +96,10 @@ npx @modelcontextprotocol/inspector uv run --directory /absolute/path/to/control
 5. The PNG result is stored in the cache and returned as image content (`analysis.py`,
    `server.py`).
 
-Canny needs no checkpoint and is never cached in memory. Prompted results are keyed by the
-prompt as well, and the note about the region travels inside the PNG's text chunk.
+Canny needs no checkpoint and is never cached in memory. Cache keys include each processor's
+render version, so bumping a version in the registry retires that analysis's old results
+without touching the others. Prompted results are keyed by the prompt as well, and the note
+about the region travels inside the PNG's text chunk.
 
 ## Development
 

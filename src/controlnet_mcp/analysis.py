@@ -99,7 +99,7 @@ class AnalysisService:
         data = path.read_bytes()
         digest = image_digest(data)
 
-        cached = self.cache.get(digest, spec.kind, resolution, variant)
+        cached = self.cache.get(digest, spec.kind, spec.version, resolution, variant)
         cached_size = _png_size(cached) if cached is not None else None
         if cached is not None and cached_size is not None:
             width, height = cached_size
@@ -130,7 +130,7 @@ class AnalysisService:
             logger.info("Running %s on %s at %d", spec.kind, filename, resolution)
             output = spec.run(detector, image, resolution, prompt)
         png = image_to_png_bytes(output.image, output.note)
-        self.cache.put(digest, spec.kind, resolution, png, variant)
+        self.cache.put(digest, spec.kind, spec.version, resolution, png, variant)
         return AnalysisResult(
             kind=spec.kind,
             resolution=resolution,

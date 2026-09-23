@@ -1,5 +1,6 @@
 """Tests for the analysis service: validation, caching, and processor dispatch."""
 
+import dataclasses
 import io
 import threading
 import time
@@ -135,7 +136,22 @@ def test_analyze_uses_default_resolution(
 
     assert counter.resolutions == [128]
     assert result.resolution == 128
-    assert list(service.settings.output_dir.rglob("fake-128.png"))
+    assert list(service.settings.output_dir.rglob("fake-v1-128.png"))
+
+
+def test_version_bump_retires_cached_result(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    counter = RunCounter()
+    spec = make_fake_spec("fake", counter)
+    monkeypatch.setitem(PROCESSORS, "fake", spec)
+    service.analyze(reference, "fake", 64)
+
+    monkeypatch.setitem(PROCESSORS, "fake", dataclasses.replace(spec, version="2"))
+    bumped = service.analyze(reference, "fake", 64)
+
+    assert counter.calls == 2
+    assert bumped.from_cache is False
 
 
 def test_analyze_missing_checkpoint_propagates(
@@ -206,7 +222,7 @@ def test_note_survives_cache(
 
 def test_unreadable_cache_file_is_rendered_again(service: AnalysisService, reference: str) -> None:
     first = service.analyze(reference, "canny", 64)
-    cache_path = next(service.settings.output_dir.rglob("canny-64.png"))
+    cache_path = next(service.settings.output_dir.rglob("canny-v1-64.png"))
     cache_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"truncated")
 
     result = service.analyze(reference, "canny", 64)
