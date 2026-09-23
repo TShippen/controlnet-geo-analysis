@@ -145,15 +145,30 @@ def image_to_png_bytes(image: Image.Image, measurement: Measurement | None = Non
     return buffer.getvalue()
 
 
+def png_size_and_measurement(data: bytes) -> tuple[tuple[int, int], Measurement]:
+    """The pixel size and the stored measurement of a PNG, read in one decode.
+
+    Raises:
+        OSError: When the bytes do not decode as an image.
+    """
+    with Image.open(io.BytesIO(data)) as image:
+        image.load()
+        return (image.width, image.height), _stored_measurement(image)
+
+
 def png_measurement(data: bytes) -> Measurement:
     """Return the measurement stored by ``image_to_png_bytes``.
 
     A form whose text chunk is absent comes back empty, so a PNG written
     without a measurement yields ``EMPTY_MEASUREMENT``.
     """
-    with Image.open(io.BytesIO(data)) as image:
-        text = getattr(image, "text", {})
-        return Measurement(
-            brief=str(text.get(PNG_BRIEF_KEY, "")),
-            full=str(text.get(PNG_FULL_KEY, "")),
-        )
+    return png_size_and_measurement(data)[1]
+
+
+def _stored_measurement(image: Image.Image) -> Measurement:
+    """Read both measurement forms out of an open image's text chunks."""
+    text = getattr(image, "text", {})
+    return Measurement(
+        brief=str(text.get(PNG_BRIEF_KEY, "")),
+        full=str(text.get(PNG_FULL_KEY, "")),
+    )

@@ -49,7 +49,8 @@ def make_fake_spec(
     """A processor that renders a plain image and reports ``measurement``.
 
     The measurement defaults to a non-empty one because every real processor
-    measures its output, and a result without one is never cached.
+    measures its output. A result without one is still written to the cache,
+    but it is never served from it.
     """
 
     def build(model_dir: Path, device: torch.device) -> object:

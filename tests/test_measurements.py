@@ -116,6 +116,21 @@ def test_lines_caps_full_list() -> None:
     assert measurement.full.count(")-(") == 12
 
 
+def test_lines_single_segment_uses_singular() -> None:
+    brief = measure_lines([(0.0, 0.0, 30.0, 0.0)], 100, 100).brief
+
+    assert brief == "1 straight edge; longest (0.00,0.00)-(0.30,0.00)."
+
+
+def test_lines_clips_endpoints_to_the_frame() -> None:
+    """The line detector extrapolates endpoints past the border of the image."""
+    segments = [(-5.0, 54.0, 101.0, 54.0)]
+
+    brief = measure_lines(segments, 100, 100).brief
+
+    assert "(0.00,0.54)-(1.00,0.54)" in brief
+
+
 def test_lines_empty() -> None:
     measurement = measure_lines([], 100, 100)
 

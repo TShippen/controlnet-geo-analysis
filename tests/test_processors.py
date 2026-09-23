@@ -5,6 +5,7 @@ tests, which skip unless the checkpoints named by their spec are present
 under the configured ``MODEL_DIR``.
 """
 
+import re
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
@@ -49,6 +50,13 @@ def structured_test_image(size: tuple[int, int]) -> Image.Image:
     return image
 
 
+def edge_share(brief: str) -> float:
+    """The percentage an edge measurement reports, as a number."""
+    match = re.search(r"([\d.]+)%", brief)
+    assert match is not None, f"No percentage in {brief!r}"
+    return float(match.group(1))
+
+
 def test_registry_covers_all_kinds() -> None:
     assert set(PROCESSORS) == set(ANALYSIS_KINDS)
     assert all(spec.kind == kind for kind, spec in PROCESSORS.items())
@@ -89,8 +97,23 @@ def test_canny_run_measures_edges() -> None:
     assert len(output.measurement.brief) < BRIEF_LIMIT
 
 
+def test_canny_measures_the_drawn_edges_not_the_ground() -> None:
+    """Edges are the minority of a canny output, so a measured majority means inverted polarity."""
+    spec = get_processor("canny")
+    detector = spec.build(Path("/nonexistent"), torch.device("cpu"))
+
+    output = spec.run(detector, structured_test_image((200, 100)), 128, None)
+
+    assert 0 < edge_share(output.measurement.brief) < 50
+
+
 def test_lines_version_is_two() -> None:
     assert PROCESSORS["lines"].version == "2"
+
+
+def test_lineart_version_is_two() -> None:
+    """The bump retires cached PNGs whose stored measurement has the inverted polarity."""
+    assert PROCESSORS["lineart"].version == "2"
 
 
 def test_lines_run_draws_and_measures_segments(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -143,6 +166,9 @@ def test_learned_processor_produces_rgb_at_resolution(
     assert len(output.measurement.brief) < BRIEF_LIMIT
     if kind == "lines":
         assert output.measurement.brief[0].isdigit()
+    if kind == "lineart":
+        # Strokes are the minority of the drawing; a measured majority means inverted polarity.
+        assert 0 < edge_share(output.measurement.brief) < 50
 
 
 @pytest.mark.slow

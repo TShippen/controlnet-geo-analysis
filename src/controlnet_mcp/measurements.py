@@ -177,4 +177,16 @@ def _segment_length(segment: Sequence[float]) -> float:
 def _endpoints(segment: Sequence[float], width: int, height: int) -> str:
     """Both ends of one segment as normalized coordinate pairs."""
     x0, y0, x1, y1 = segment
-    return f"({x0 / width:.2f},{y0 / height:.2f})-({x1 / width:.2f},{y1 / height:.2f})"
+    return (
+        f"({_normalized(x0, width):.2f},{_normalized(y0, height):.2f})"
+        f"-({_normalized(x1, width):.2f},{_normalized(y1, height):.2f})"
+    )
+
+
+def _normalized(value: float, extent: int) -> float:
+    """One pixel coordinate as a fraction of an image extent, clipped to the frame.
+
+    Line detection extrapolates endpoints past the border of the image, so a
+    raw coordinate can fall outside the image.
+    """
+    return min(max(value / extent, 0.0), 1.0)

@@ -4,19 +4,16 @@ This module contains no MCP transport logic; the server module translates its
 exceptions into tool errors.
 """
 
-import io
 import logging
 import threading
 from dataclasses import dataclass
-
-from PIL import Image
 
 from controlnet_mcp.cache import AnalysisCache, image_digest
 from controlnet_mcp.config import MAX_RESOLUTION, MIN_RESOLUTION, Settings
 from controlnet_mcp.images import (
     decode_reference_image,
     image_to_png_bytes,
-    png_measurement,
+    png_size_and_measurement,
     resolve_reference_path,
 )
 from controlnet_mcp.measurements import Measurement
@@ -202,12 +199,9 @@ def _usable_cached_render(png: bytes) -> _CachedRender | None:
     so an empty brief means the file was written before analyses were measured.
     """
     try:
-        with Image.open(io.BytesIO(png)) as image:
-            image.load()
-            width, height = image.width, image.height
+        (width, height), measurement = png_size_and_measurement(png)
     except OSError:
         return None
-    measurement = png_measurement(png)
     if not measurement.brief:
         return None
     return _CachedRender(width=width, height=height, measurement=measurement)

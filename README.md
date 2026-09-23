@@ -29,7 +29,8 @@ prompt on it takes a fraction of a second. A prompt on any other analysis is an 
 
 Every analysis measures its own output. A short and a long form of that measurement are stored
 with the cached image, and `RESULT_MEASUREMENTS` in `.env` decides which one the agent sees.
-`off` sends no numbers: the result text repeats what the analysis shows and how to read it.
+`off` sends no numbers for any analysis, segments included: the result text repeats what the
+analysis shows and how to read it.
 `brief`, the default, replaces that with one measured sentence, since the tool description
 already says how to read each analysis. `full` extends the sentence with whatever else that
 analysis measured, such as a bounding box or a centroid. The setting is read at startup and no

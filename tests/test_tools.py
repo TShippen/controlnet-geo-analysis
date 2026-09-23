@@ -247,6 +247,57 @@ async def test_brief_text_omits_instructions_and_carries_measurement(
     assert "Ask for it" not in text.text
 
 
+async def test_off_keeps_the_description_and_drops_the_measurement(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Off carries no numbers for any analysis, including the prompted one."""
+    monkeypatch.setitem(PROCESSORS, "segments", fake_segments_spec())
+
+    async with client_measuring(settings, "off") as client:
+        result = await client.call_tool(
+            "analyze_image",
+            {
+                "filename": "chair.png",
+                "analysis": "segments",
+                "box": [0.2, 0.2, 0.8, 0.8],
+                "resolution": 64,
+            },
+        )
+
+    text = result.content[0]
+    assert isinstance(text, TextContent)
+    assert "Ask for it" in text.text
+    assert SAMPLE_MEASUREMENT.brief not in text.text
+
+
+async def test_measurement_mode_follows_the_service(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The service's settings decide the mode, even when the server was handed other settings."""
+    monkeypatch.setitem(PROCESSORS, "segments", fake_segments_spec())
+    measuring = settings.model_copy(update={"result_measurements": "full"})
+    manager = ModelManager(measuring.model_dir, torch.device("cpu"), max_loaded=1)
+    service = AnalysisService(measuring, manager, AnalysisCache(measuring.output_dir))
+    silent = settings.model_copy(update={"result_measurements": "off"})
+
+    async with Client(build_server(silent, service)) as client:
+        result = await client.call_tool(
+            "analyze_image",
+            {
+                "filename": "chair.png",
+                "analysis": "segments",
+                "box": [0.2, 0.2, 0.8, 0.8],
+                "resolution": 64,
+            },
+        )
+        description = await tool_description(client, "analyze_image")
+
+    text = result.content[0]
+    assert isinstance(text, TextContent)
+    assert SAMPLE_MEASUREMENT.full in text.text
+    assert "measurements" in description
+
+
 async def test_description_mentions_measurements_only_when_on(settings: Settings) -> None:
     async with client_measuring(settings, "off") as off_client:
         off = await tool_description(off_client, "analyze_image")

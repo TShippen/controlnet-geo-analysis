@@ -54,9 +54,13 @@ def build_server(settings: Settings, service: AnalysisService | None = None) -> 
     Args:
         settings: Validated configuration.
         service: An analysis service to reuse; built from ``settings`` when omitted.
+
+    The measurement setting is read off the service, which selects the form of
+    every measurement it reports, so the tool description and the result text
+    describe the same service.
     """
     analysis_service = service if service is not None else AnalysisService.from_settings(settings)
-    measurement_mode = settings.result_measurements
+    measurement_mode = analysis_service.settings.result_measurements
     mcp = MCPServer(SERVER_NAME, instructions=SERVER_INSTRUCTIONS)
     read_only = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 

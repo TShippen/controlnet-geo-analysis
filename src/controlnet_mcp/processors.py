@@ -93,13 +93,16 @@ class ProcessorSpec:
         run: Runs a detector on an RGB image at a detect resolution with an
             optional region prompt and returns the RGB result plus its
             measurement. Every run measures what it rendered, even when there
-            was nothing to find; a result whose brief measurement is empty is
-            taken for a stale cache entry and rendered again.
+            was nothing to find; a cached result whose brief measurement is
+            empty is taken for a stale entry and rendered again.
         accepts_prompt: Whether the analysis needs a region prompt. Prompts are
             rejected for analyses that do not accept them.
         version: Render version, part of every cache key. Bump it whenever the
             output for the same inputs changes: a different checkpoint, a
             changed detector default, or a change to how the result is drawn.
+            The stored measurement is part of that output, because a cache hit
+            serves the text saved with the PNG rather than measuring again, so
+            a change to what the measurement reports needs a bump too.
     """
 
     kind: str
@@ -206,9 +209,9 @@ def _run_normals(
 def _run_lineart(
     detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
 ) -> AnalysisOutput:
-    """Run the lineart detector and measure its edge density; its lines are dark on white."""
+    """Run the lineart detector and measure its edge density; its lines are light on dark."""
     rendered = _run_detector(detector, image, resolution, prompt).image
-    measurement = measure_edges(_grayscale(rendered), edges_are_dark=True)
+    measurement = measure_edges(_grayscale(rendered), edges_are_dark=False)
     return AnalysisOutput(image=rendered, measurement=measurement)
 
 
@@ -317,12 +320,13 @@ PROCESSORS: dict[str, ProcessorSpec] = {
     "lineart": ProcessorSpec(
         kind="lineart",
         description=(
-            "Clean line drawing: dark contours on white with texture and shading removed. Ask "
+            "Clean line drawing: light contours on black with texture and shading removed. Ask "
             "for it to trace silhouettes, part boundaries, and profile curves."
         ),
         checkpoints=(LINEART_CHECKPOINT, LINEART_COARSE_CHECKPOINT),
         build=_build_lineart,
         run=_run_lineart,
+        version="2",
     ),
     "lines": ProcessorSpec(
         kind="lines",
