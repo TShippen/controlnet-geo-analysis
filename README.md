@@ -27,6 +27,14 @@ are the controlnet-aux detectors Zoe, NormalBae, Lineart, MLSD, MobileSAM, and O
 on the image plus its area share and bounding box. The image is encoded once and each further
 prompt on it takes a fraction of a second. A prompt on any other analysis is an error.
 
+Every analysis measures its own output. A short and a long form of that measurement are stored
+with the cached image, and `RESULT_MEASUREMENTS` in `.env` decides which one the agent sees.
+`off` sends no numbers: the result text repeats what the analysis shows and how to read it.
+`brief`, the default, replaces that with one measured sentence, since the tool description
+already says how to read each analysis. `full` extends the sentence with whatever else that
+analysis measured, such as a bounding box or a centroid. The setting is read at startup and no
+tool argument exposes it, so both response styles can be compared over the same cache.
+
 Filenames are confined to the reference directory. Absolute paths, parent references, symlinks
 that leave the directory, and unsupported extensions are rejected. Supported formats are PNG,
 JPEG, and WebP.
@@ -98,8 +106,9 @@ npx @modelcontextprotocol/inspector uv run --directory /absolute/path/to/control
 
 Canny needs no checkpoint and is never cached in memory. Cache keys include each processor's
 render version, so bumping a version in the registry retires that analysis's old results
-without touching the others. Prompted results are keyed by the prompt as well, and the note
-about the region travels inside the PNG's text chunk.
+without touching the others. Prompted results are keyed by the prompt as well, and both forms of
+the measurement travel inside the PNG's text chunks, so changing `RESULT_MEASUREMENTS` changes
+what is reported and never invalidates the cache.
 
 ## Development
 

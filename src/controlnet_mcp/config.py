@@ -20,6 +20,7 @@ MIN_RESOLUTION = 64
 MAX_RESOLUTION = 2048
 
 DeviceSetting = Literal["auto", "cpu", "cuda", "mps"]
+MeasurementSetting = Literal["off", "brief", "full"]
 
 
 class ConfigurationError(Exception):
@@ -65,6 +66,14 @@ class Settings(BaseSettings):
     device: DeviceSetting = Field(
         default="auto",
         description="Torch device selection: auto picks cuda, then mps, then cpu.",
+    )
+    result_measurements: MeasurementSetting = Field(
+        default="brief",
+        description=(
+            "How much of each analysis's measurements the result text carries: off keeps the "
+            "reading instructions and no numbers, brief reports one measured sentence, and full "
+            "extends that sentence with the analysis's extra detail."
+        ),
     )
 
     @model_validator(mode="after")

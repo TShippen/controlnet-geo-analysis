@@ -13,6 +13,8 @@ from PIL import Image, UnidentifiedImageError
 from PIL.PngImagePlugin import PngInfo
 from pydantic import BaseModel, Field
 
+from controlnet_mcp.measurements import Measurement
+
 logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".png", ".jpg", ".jpeg", ".webp"})
@@ -126,21 +128,32 @@ def decode_reference_image(data: bytes, filename: str) -> Image.Image:
         raise ReferenceImageError(f"Reference image {filename!r} could not be decoded.") from exc
 
 
-PNG_NOTE_KEY = "notes"
+PNG_BRIEF_KEY = "measure-brief"
+PNG_FULL_KEY = "measure-full"
 
 
-def image_to_png_bytes(image: Image.Image, note: str | None = None) -> bytes:
-    """Encode a PIL image as PNG bytes, storing ``note`` in a text chunk when given."""
+def image_to_png_bytes(image: Image.Image, measurement: Measurement | None = None) -> bytes:
+    """Encode a PIL image as PNG bytes, storing each non-empty measurement form in a text chunk."""
     buffer = io.BytesIO()
     metadata = PngInfo()
-    if note:
-        metadata.add_text(PNG_NOTE_KEY, note)
+    if measurement is not None:
+        if measurement.brief:
+            metadata.add_text(PNG_BRIEF_KEY, measurement.brief)
+        if measurement.full:
+            metadata.add_text(PNG_FULL_KEY, measurement.full)
     image.save(buffer, format="PNG", pnginfo=metadata)
     return buffer.getvalue()
 
 
-def png_note(data: bytes) -> str:
-    """Return the note stored by ``image_to_png_bytes``, or an empty string."""
+def png_measurement(data: bytes) -> Measurement:
+    """Return the measurement stored by ``image_to_png_bytes``.
+
+    A form whose text chunk is absent comes back empty, so a PNG written
+    without a measurement yields ``EMPTY_MEASUREMENT``.
+    """
     with Image.open(io.BytesIO(data)) as image:
         text = getattr(image, "text", {})
-        return str(text.get(PNG_NOTE_KEY, ""))
+        return Measurement(
+            brief=str(text.get(PNG_BRIEF_KEY, "")),
+            full=str(text.get(PNG_FULL_KEY, "")),
+        )

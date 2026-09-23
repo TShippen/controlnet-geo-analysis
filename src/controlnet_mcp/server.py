@@ -16,8 +16,13 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from controlnet_mcp import images
-from controlnet_mcp.analysis import AnalysisService, ResolutionError
-from controlnet_mcp.config import Settings, apply_download_policy, load_settings
+from controlnet_mcp.analysis import AnalysisResult, AnalysisService, ResolutionError
+from controlnet_mcp.config import (
+    MeasurementSetting,
+    Settings,
+    apply_download_policy,
+    load_settings,
+)
 from controlnet_mcp.images import ReferenceImageError, ReferenceImageInfo
 from controlnet_mcp.model_manager import MissingCheckpointError
 from controlnet_mcp.processors import PROCESSORS, AnalysisKind, UnknownAnalysisError
@@ -31,14 +36,7 @@ SERVER_INSTRUCTIONS = (
     "Visual evidence about reference images for rebuilding an object in 3D. "
     "Start with list_reference_images, look at the original with get_reference_image, then "
     "ask analyze_image for depth, normals, lineart, lines, canny, or segments. "
-    "Each result is an image with a short note. Combine several before committing to geometry."
-)
-
-ANALYZE_IMAGE_DESCRIPTION = (
-    "Produce one visual analysis of a reference image. What each analysis shows and when to "
-    "ask for it:\n"
-    + "\n".join(f"- {kind}: {spec.description}" for kind, spec in PROCESSORS.items())
-    + "\nAnalyses that take a box or point need one; use get_reference_image to choose it."
+    "Each result is an image with a line of text. Combine several before committing to geometry."
 )
 
 _EXPECTED_ERRORS = (
@@ -58,6 +56,7 @@ def build_server(settings: Settings, service: AnalysisService | None = None) -> 
         service: An analysis service to reuse; built from ``settings`` when omitted.
     """
     analysis_service = service if service is not None else AnalysisService.from_settings(settings)
+    measurement_mode = settings.result_measurements
     mcp = MCPServer(SERVER_NAME, instructions=SERVER_INSTRUCTIONS)
     read_only = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 
@@ -84,7 +83,7 @@ def build_server(settings: Settings, service: AnalysisService | None = None) -> 
             raise ToolError(str(exc)) from exc
         return Image(data=data, format=mime.removeprefix("image/"))
 
-    @mcp.tool(annotations=read_only, description=ANALYZE_IMAGE_DESCRIPTION)
+    @mcp.tool(annotations=read_only, description=_analyze_image_description(measurement_mode))
     def analyze_image(
         filename: Annotated[str, Field(description="A name from list_reference_images.")],
         analysis: Annotated[AnalysisKind, Field(description="Which analysis to produce.")],
@@ -118,8 +117,9 @@ def build_server(settings: Settings, service: AnalysisService | None = None) -> 
     ) -> list[str | Image]:
         """Run one analysis and return its summary text and image.
 
-        The agent-facing description is ``ANALYZE_IMAGE_DESCRIPTION``, generated
-        from the processor registry so the explanations exist in one place.
+        The agent-facing description comes from ``_analyze_image_description``,
+        generated from the processor registry so the explanations exist in one
+        place.
         """
         try:
             prompt = None
@@ -128,15 +128,48 @@ def build_server(settings: Settings, service: AnalysisService | None = None) -> 
             result = analysis_service.analyze(filename, analysis, resolution, prompt)
         except _EXPECTED_ERRORS as exc:
             raise ToolError(str(exc)) from exc
-        summary = (
+        text = _result_text(result, filename, measurement_mode)
+        return [text, Image(data=result.png, format="png")]
+
+    return mcp
+
+
+def _analyze_image_description(mode: MeasurementSetting) -> str:
+    """The agent-facing description of ``analyze_image`` for one measurement setting.
+
+    The per-analysis reading instructions live here rather than in each result,
+    so a result that carries measurements does not repeat them.
+    """
+    description = (
+        "Produce one visual analysis of a reference image. What each analysis shows and when to "
+        "ask for it:\n"
+        + "\n".join(f"- {kind}: {spec.description}" for kind, spec in PROCESSORS.items())
+        + "\nAnalyses that take a box or point need one; use get_reference_image to choose it."
+    )
+    if mode == "off":
+        return description
+    return f"{description}\nEach result's text reports measurements taken from that output."
+
+
+def _result_text(result: AnalysisResult, filename: str, mode: MeasurementSetting) -> str:
+    """The text block returned beside the analysis image.
+
+    With measurements off, the text repeats what the analysis shows and how to
+    read it. Otherwise it names the output and reports what was measured from it.
+    """
+    if mode == "off":
+        return (
             f"{result.kind} analysis of {filename} ({result.width}x{result.height}). "
             f"{result.description}"
         )
-        if result.note:
-            summary = f"{summary} {result.note}"
-        return [summary, Image(data=result.png, format="png")]
-
-    return mcp
+    cached = ", from cache" if result.from_cache else ""
+    summary = (
+        f"{result.kind} analysis of {filename} ({result.width}x{result.height}) "
+        f"at resolution {result.resolution}{cached}."
+    )
+    if not result.measurement:
+        return summary
+    return f"{summary} {result.measurement}"
 
 
 def main() -> None:

@@ -8,11 +8,14 @@ under the configured ``MODEL_DIR``.
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
+from controlnet_aux import MLSDdetector
 from PIL import Image, ImageDraw
 
 from controlnet_mcp.checkpoints import CheckpointSpec
+from controlnet_mcp.measurements import EMPTY_MEASUREMENT
 from controlnet_mcp.processors import (
     ANALYSIS_KINDS,
     PROCESSORS,
@@ -22,6 +25,8 @@ from controlnet_mcp.processors import (
 from controlnet_mcp.segmentation import RegionPrompt
 
 LEARNED_KINDS = ("depth", "normals", "lineart", "lines", "segments")
+
+BRIEF_LIMIT = 160
 
 
 def structured_test_image(size: tuple[int, int]) -> Image.Image:
@@ -71,7 +76,52 @@ def test_canny_run_produces_rgb_at_resolution() -> None:
 
     assert output.image.mode == "RGB"
     assert output.image.size == (256, 128)
-    assert output.note == ""
+
+
+def test_canny_run_measures_edges() -> None:
+    spec = get_processor("canny")
+    detector = spec.build(Path("/nonexistent"), torch.device("cpu"))
+
+    output = spec.run(detector, structured_test_image((200, 100)), 128, None)
+
+    assert output.measurement != EMPTY_MEASUREMENT
+    assert "%" in output.measurement.brief
+    assert len(output.measurement.brief) < BRIEF_LIMIT
+
+
+def test_lines_version_is_two() -> None:
+    assert PROCESSORS["lines"].version == "2"
+
+
+def test_lines_run_draws_and_measures_segments(monkeypatch: pytest.MonkeyPatch) -> None:
+    segments = np.array([[0.0, 0.0, 60.0, 0.0], [10.0, 10.0, 10.0, 50.0]])
+    monkeypatch.setattr("controlnet_mcp.processors.pred_lines", lambda *args: segments)
+
+    output = get_processor("lines").run(
+        MLSDdetector(object()), structured_test_image((128, 128)), 128, None
+    )
+
+    assert "2 straight edges" in output.measurement.brief
+    assert np.array(output.image)[0, 0].tolist() == [255, 255, 255]
+    assert np.array(output.image)[64, 64].tolist() == [0, 0, 0]
+
+
+def test_lines_run_reports_nothing_when_no_segments_are_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``pred_lines`` indexes columns of an empty result, so finding nothing raises IndexError."""
+
+    def raise_index_error(*args: object) -> np.ndarray:
+        raise IndexError("too many indices for array")
+
+    monkeypatch.setattr("controlnet_mcp.processors.pred_lines", raise_index_error)
+
+    output = get_processor("lines").run(
+        MLSDdetector(object()), structured_test_image((128, 128)), 128, None
+    )
+
+    assert output.measurement.brief == "No straight edges found."
+    assert not np.array(output.image).any()
 
 
 @pytest.mark.slow
@@ -89,4 +139,21 @@ def test_learned_processor_produces_rgb_at_resolution(
 
     assert output.image.mode == "RGB"
     assert output.image.size == (128, 128)
-    assert bool(output.note) is spec.accepts_prompt
+    assert output.measurement.brief
+    assert len(output.measurement.brief) < BRIEF_LIMIT
+    if kind == "lines":
+        assert output.measurement.brief[0].isdigit()
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_lines_on_an_image_without_straight_edges(
+    installed_checkpoints: Callable[[Iterable[CheckpointSpec]], Path],
+) -> None:
+    """Pins what the real detector does when it finds nothing, which is to raise IndexError."""
+    spec = get_processor("lines")
+    detector = spec.build(installed_checkpoints(spec.checkpoints), torch.device("cpu"))
+
+    output = spec.run(detector, Image.new("RGB", (128, 128), (120, 120, 120)), 128, None)
+
+    assert output.measurement.brief == "No straight edges found."

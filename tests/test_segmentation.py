@@ -14,7 +14,6 @@ from controlnet_mcp.segmentation import (
     PromptedSegmenter,
     PromptError,
     RegionPrompt,
-    describe_region,
     render_region_overlay,
 )
 
@@ -65,21 +64,6 @@ def test_prompt_digest_ignores_float_noise() -> None:
 
     assert negative_zero == plain
     assert noisy == plain
-
-
-def test_describe_region_reports_bbox_and_area() -> None:
-    mask = np.zeros((8, 8), dtype=bool)
-    mask[2:6, 1:5] = True
-
-    note = describe_region(mask)
-
-    assert "25.0%" in note
-    assert "x 0.12 to 0.62" in note
-    assert "y 0.25 to 0.75" in note
-
-
-def test_describe_region_empty() -> None:
-    assert describe_region(np.zeros((4, 4), dtype=bool)) == "No region found."
 
 
 def test_overlay_changes_only_masked_pixels() -> None:

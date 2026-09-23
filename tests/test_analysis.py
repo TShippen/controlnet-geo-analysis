@@ -11,11 +11,13 @@ import pytest
 import torch
 from PIL import Image
 
-from conftest import write_test_image
+from conftest import SAMPLE_MEASUREMENT, write_test_image
 from controlnet_mcp.analysis import AnalysisService, ResolutionError
 from controlnet_mcp.cache import AnalysisCache
 from controlnet_mcp.checkpoints import ZOE_CHECKPOINT, CheckpointSpec
-from controlnet_mcp.config import Settings
+from controlnet_mcp.config import MeasurementSetting, Settings
+from controlnet_mcp.images import image_to_png_bytes, png_measurement
+from controlnet_mcp.measurements import Measurement
 from controlnet_mcp.model_manager import MissingCheckpointError, ModelManager
 from controlnet_mcp.processors import (
     PROCESSORS,
@@ -24,6 +26,8 @@ from controlnet_mcp.processors import (
     UnknownAnalysisError,
 )
 from controlnet_mcp.segmentation import PromptError, RegionPrompt
+
+DISTINCT_FORMS = Measurement(brief="B", full="F")
 
 
 @dataclass
@@ -40,7 +44,14 @@ def make_fake_spec(
     counter: RunCounter,
     checkpoints: tuple[CheckpointSpec, ...] = (),
     accepts_prompt: bool = False,
+    measurement: Measurement = SAMPLE_MEASUREMENT,
 ) -> ProcessorSpec:
+    """A processor that renders a plain image and reports ``measurement``.
+
+    The measurement defaults to a non-empty one because every real processor
+    measures its output, and a result without one is never cached.
+    """
+
     def build(model_dir: Path, device: torch.device) -> object:
         return object()
 
@@ -50,8 +61,8 @@ def make_fake_spec(
         counter.calls += 1
         counter.resolutions.append(resolution)
         counter.prompts.append(prompt)
-        note = f"Region from {prompt.digest()}." if prompt is not None else ""
-        return AnalysisOutput(Image.new("RGB", (resolution, resolution // 2), (0, 0, 255)), note)
+        rendered = Image.new("RGB", (resolution, resolution // 2), (0, 0, 255))
+        return AnalysisOutput(rendered, measurement)
 
     return ProcessorSpec(
         kind=kind,
@@ -81,6 +92,13 @@ def settings(tmp_path: Path) -> Settings:
 def service(settings: Settings) -> AnalysisService:
     manager = ModelManager(settings.model_dir, torch.device("cpu"), max_loaded=1)
     return AnalysisService(settings, manager, AnalysisCache(settings.output_dir))
+
+
+def service_measuring(settings: Settings, mode: MeasurementSetting) -> AnalysisService:
+    """A service over the same directories that emits measurements at ``mode``."""
+    tuned = settings.model_copy(update={"result_measurements": mode})
+    manager = ModelManager(tuned.model_dir, torch.device("cpu"), max_loaded=1)
+    return AnalysisService(tuned, manager, AnalysisCache(tuned.output_dir))
 
 
 @pytest.fixture
@@ -205,19 +223,87 @@ def test_different_prompts_cache_separately(
     assert repeat.from_cache is True
 
 
-def test_note_survives_cache(
+def test_measurement_survives_cache(
     service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     counter = RunCounter()
-    monkeypatch.setitem(PROCESSORS, "fake", make_fake_spec("fake", counter, accepts_prompt=True))
+    measured = make_fake_spec("fake", counter, accepts_prompt=True, measurement=SAMPLE_MEASUREMENT)
+    monkeypatch.setitem(PROCESSORS, "fake", measured)
     prompt = RegionPrompt.from_lists(None, [0.3, 0.3])
 
     fresh = service.analyze(reference, "fake", 64, prompt)
     cached = service.analyze(reference, "fake", 64, prompt)
 
-    assert fresh.note == f"Region from {prompt.digest()}."
-    assert cached.note == fresh.note
+    assert fresh.measurement == SAMPLE_MEASUREMENT.brief
+    assert cached.measurement == fresh.measurement
     assert cached.from_cache is True
+
+
+def test_off_selects_nothing(
+    settings: Settings, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        PROCESSORS, "fake", make_fake_spec("fake", RunCounter(), measurement=DISTINCT_FORMS)
+    )
+
+    result = service_measuring(settings, "off").analyze(reference, "fake", 64)
+
+    assert result.measurement == ""
+
+
+def test_brief_selects_brief(
+    settings: Settings, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        PROCESSORS, "fake", make_fake_spec("fake", RunCounter(), measurement=DISTINCT_FORMS)
+    )
+
+    result = service_measuring(settings, "brief").analyze(reference, "fake", 64)
+
+    assert result.measurement == "B"
+
+
+def test_full_selects_full(
+    settings: Settings, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        PROCESSORS, "fake", make_fake_spec("fake", RunCounter(), measurement=DISTINCT_FORMS)
+    )
+
+    result = service_measuring(settings, "full").analyze(reference, "fake", 64)
+
+    assert result.measurement == "F"
+
+
+def test_selection_applies_to_cache_hit(
+    settings: Settings, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        PROCESSORS, "fake", make_fake_spec("fake", RunCounter(), measurement=DISTINCT_FORMS)
+    )
+    service_measuring(settings, "brief").analyze(reference, "fake", 64)
+
+    cached = service_measuring(settings, "full").analyze(reference, "fake", 64)
+
+    assert cached.from_cache is True
+    assert cached.measurement == "F"
+
+
+def test_cached_png_without_measurement_is_rendered_again(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    counter = RunCounter()
+    spec = make_fake_spec("fake", counter, measurement=SAMPLE_MEASUREMENT)
+    monkeypatch.setitem(PROCESSORS, "fake", spec)
+    first = service.analyze(reference, "fake", 64)
+    cache_path = next(service.settings.output_dir.rglob("fake-v1-64.png"))
+    cache_path.write_bytes(image_to_png_bytes(Image.open(io.BytesIO(first.png))))
+
+    result = service.analyze(reference, "fake", 64)
+
+    assert result.from_cache is False
+    assert result.measurement == SAMPLE_MEASUREMENT.brief
+    assert png_measurement(cache_path.read_bytes()) == SAMPLE_MEASUREMENT
 
 
 def test_unreadable_cache_file_is_rendered_again(service: AnalysisService, reference: str) -> None:
@@ -251,7 +337,7 @@ def make_stateful_spec(kind: str) -> ProcessorSpec:
         assert isinstance(detector, StatefulDetector)
         detector.current = image.getpixel((0, 0))
         time.sleep(0.05)
-        return AnalysisOutput(Image.new("RGB", (4, 4), detector.current), "")
+        return AnalysisOutput(Image.new("RGB", (4, 4), detector.current))
 
     return ProcessorSpec(
         kind=kind,

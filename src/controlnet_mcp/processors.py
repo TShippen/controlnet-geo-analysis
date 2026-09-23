@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import cv2
+import numpy as np
 import torch
 from controlnet_aux import (
     CannyDetector,
@@ -21,6 +23,7 @@ from controlnet_aux import (
     NormalBaeDetector,
     ZoeDetector,
 )
+from controlnet_aux.mlsd.utils import pred_lines
 from controlnet_aux.segment_anything.build_sam import sam_model_registry
 from PIL import Image
 
@@ -34,11 +37,19 @@ from controlnet_mcp.checkpoints import (
     CheckpointSpec,
     checkpoint_path,
 )
+from controlnet_mcp.measurements import (
+    EMPTY_MEASUREMENT,
+    Measurement,
+    measure_depth,
+    measure_edges,
+    measure_lines,
+    measure_mask,
+    measure_normals,
+)
 from controlnet_mcp.segmentation import (
     PromptedSegmenter,
     PromptError,
     RegionPrompt,
-    describe_region,
     render_region_overlay,
     resize_for_detection,
 )
@@ -51,6 +62,9 @@ ANALYSIS_KINDS: tuple[str, ...] = ("depth", "normals", "lineart", "lines", "segm
 
 ANNOTATOR_SUBDIR = "annotators"
 
+LINE_SCORE_THRESHOLD = 0.1
+LINE_DISTANCE_THRESHOLD = 0.1
+
 
 class UnknownAnalysisError(Exception):
     """Raised when a requested analysis name is not one of ``ANALYSIS_KINDS``."""
@@ -58,10 +72,10 @@ class UnknownAnalysisError(Exception):
 
 @dataclass(frozen=True)
 class AnalysisOutput:
-    """The rendered analysis image and an optional note describing what was found."""
+    """The rendered analysis image and what was measured from it."""
 
     image: Image.Image
-    note: str = ""
+    measurement: Measurement = EMPTY_MEASUREMENT
 
 
 @dataclass(frozen=True)
@@ -77,7 +91,10 @@ class ProcessorSpec:
         build: Constructs the detector from the model directory and moves it
             to the given device.
         run: Runs a detector on an RGB image at a detect resolution with an
-            optional region prompt and returns the RGB result plus a note.
+            optional region prompt and returns the RGB result plus its
+            measurement. Every run measures what it rendered, even when there
+            was nothing to find; a result whose brief measurement is empty is
+            taken for a stale cache entry and rendered again.
         accepts_prompt: Whether the analysis needs a region prompt. Prompts are
             rejected for analyses that do not accept them.
         version: Render version, part of every cache key. Bump it whenever the
@@ -169,10 +186,98 @@ def _run_detector(
     return AnalysisOutput(image=result.convert("RGB"))
 
 
+def _run_depth(
+    detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+) -> AnalysisOutput:
+    """Run the depth detector and measure how much of the map is near, mid, and far."""
+    rendered = _run_detector(detector, image, resolution, prompt).image
+    return AnalysisOutput(image=rendered, measurement=measure_depth(_grayscale(rendered)))
+
+
+def _run_normals(
+    detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+) -> AnalysisOutput:
+    """Run the normal detector and measure the flat and curved areas of the map."""
+    rendered = _run_detector(detector, image, resolution, prompt).image
+    pixels = np.array(rendered, dtype=np.uint8)
+    return AnalysisOutput(image=rendered, measurement=measure_normals(pixels))
+
+
+def _run_lineart(
+    detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+) -> AnalysisOutput:
+    """Run the lineart detector and measure its edge density; its lines are dark on white."""
+    rendered = _run_detector(detector, image, resolution, prompt).image
+    measurement = measure_edges(_grayscale(rendered), edges_are_dark=True)
+    return AnalysisOutput(image=rendered, measurement=measurement)
+
+
+def _run_canny(
+    detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+) -> AnalysisOutput:
+    """Run the Canny detector and measure its edge density; its edges are white on black."""
+    rendered = _run_detector(detector, image, resolution, prompt).image
+    measurement = measure_edges(_grayscale(rendered), edges_are_dark=False)
+    return AnalysisOutput(image=rendered, measurement=measurement)
+
+
+def _run_lines(
+    detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+) -> AnalysisOutput:
+    """Draw the detected straight segments and measure their endpoints.
+
+    The drawing here mirrors what the detector does in its own call, one-pixel
+    white segments on a black canvas at the detect resolution, rather than
+    calling it: running the prediction directly keeps the endpoints, which the
+    detector would discard after drawing them.
+    """
+    del prompt
+    if not isinstance(detector, MLSDdetector):
+        raise TypeError(f"Expected an MLSDdetector, got {type(detector).__name__}")
+    pixels = np.array(resize_for_detection(image, resolution), dtype=np.uint8)
+    segments = _predict_line_segments(detector, pixels)
+    canvas = np.zeros_like(pixels)
+    for x0, y0, x1, y1 in segments:
+        cv2.line(canvas, (int(x0), int(y0)), (int(x1), int(y1)), (255, 255, 255), 1)
+    height, width = pixels.shape[:2]
+    logger.info("Detected %d straight segments at %dx%d", len(segments), width, height)
+    return AnalysisOutput(
+        image=Image.fromarray(canvas),
+        measurement=measure_lines(segments.tolist(), width, height),
+    )
+
+
+def _predict_line_segments(detector: MLSDdetector, pixels: np.ndarray) -> np.ndarray:
+    """Endpoint quadruples of every straight segment found in an RGB pixel array.
+
+    ``pred_lines`` scales the columns of its result without first checking that
+    it found anything, so an image with no straight edges raises ``IndexError``
+    there instead of returning an empty array. That case is a finding of none,
+    not a failure, so it is reported as an empty result.
+    """
+    with torch.no_grad():
+        try:
+            return pred_lines(
+                pixels,
+                detector.model,
+                [pixels.shape[0], pixels.shape[1]],
+                LINE_SCORE_THRESHOLD,
+                LINE_DISTANCE_THRESHOLD,
+            )
+        except IndexError:
+            logger.info("No straight segments found")
+            return np.zeros((0, 4), dtype=np.float32)
+
+
+def _grayscale(image: Image.Image) -> np.ndarray:
+    """The 8-bit luminance channel of a rendered analysis."""
+    return np.array(image.convert("L"), dtype=np.uint8)
+
+
 def _run_segments(
     detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
 ) -> AnalysisOutput:
-    """Segment the prompted region and render it as an overlay with a summary note."""
+    """Segment the prompted region, render it as an overlay, and measure the mask."""
     if prompt is None:
         raise PromptError("Segmentation needs a box [x0, y0, x1, y1] or a point [x, y].")
     if not isinstance(detector, PromptedSegmenter):
@@ -182,7 +287,9 @@ def _run_segments(
     logger.info(
         "Segmented region with score %.3f covering %.1f%% of the image", score, 100 * mask.mean()
     )
-    return AnalysisOutput(image=render_region_overlay(resized, mask), note=describe_region(mask))
+    return AnalysisOutput(
+        image=render_region_overlay(resized, mask), measurement=measure_mask(mask)
+    )
 
 
 PROCESSORS: dict[str, ProcessorSpec] = {
@@ -194,7 +301,7 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         ),
         checkpoints=(ZOE_CHECKPOINT,),
         build=_build_depth,
-        run=_run_detector,
+        run=_run_depth,
     ),
     "normals": ProcessorSpec(
         kind="normals",
@@ -205,7 +312,7 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         ),
         checkpoints=(NORMALBAE_CHECKPOINT,),
         build=_build_normals,
-        run=_run_detector,
+        run=_run_normals,
     ),
     "lineart": ProcessorSpec(
         kind="lineart",
@@ -215,7 +322,7 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         ),
         checkpoints=(LINEART_CHECKPOINT, LINEART_COARSE_CHECKPOINT),
         build=_build_lineart,
-        run=_run_detector,
+        run=_run_lineart,
     ),
     "lines": ProcessorSpec(
         kind="lines",
@@ -225,7 +332,8 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         ),
         checkpoints=(MLSD_CHECKPOINT,),
         build=_build_lines,
-        run=_run_detector,
+        run=_run_lines,
+        version="2",
     ),
     "segments": ProcessorSpec(
         kind="segments",
@@ -246,7 +354,7 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         ),
         checkpoints=(),
         build=_build_canny,
-        run=_run_detector,
+        run=_run_canny,
     ),
 }
 

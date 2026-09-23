@@ -61,8 +61,8 @@ async def test_all_analyses_end_to_end(client: Client, manager: ModelManager) ->
         assert isinstance(text, TextContent)
         assert isinstance(image, ImageContent)
         assert len(manager.loaded_kinds) <= 1
-        if kind == "segments":
-            assert "%" in text.text
+        assert "%" in text.text or "straight edges" in text.text, kind
+        assert "Ask for it" not in text.text, kind
 
     for kind in ANALYSIS_KINDS:
         cached = await client.call_tool("analyze_image", arguments_for(kind))

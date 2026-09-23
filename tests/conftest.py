@@ -8,8 +8,15 @@ from dotenv import dotenv_values
 from PIL import Image
 
 from controlnet_mcp.checkpoints import CheckpointSpec, missing_checkpoints
+from controlnet_mcp.measurements import Measurement
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+SAMPLE_MEASUREMENT = Measurement(
+    brief="Region covers 25.0% of the image.",
+    full="Region covers 25.0% of the image; centroid (0.38, 0.50).",
+)
+"""A measurement in the shape ``measure_mask`` produces, for tests that only need one."""
 
 
 def write_test_image(

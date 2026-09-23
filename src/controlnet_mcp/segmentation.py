@@ -149,19 +149,3 @@ def _outline(mask: np.ndarray) -> np.ndarray:
     padded = np.pad(mask, 1, constant_values=False)
     eroded = padded[:-2, 1:-1] & padded[2:, 1:-1] & padded[1:-1, :-2] & padded[1:-1, 2:] & mask
     return mask & ~eroded
-
-
-def describe_region(mask: np.ndarray) -> str:
-    """Summarize a mask as an area share and a normalized bounding box."""
-    if not mask.any():
-        return "No region found."
-    height, width = mask.shape
-    rows = np.flatnonzero(mask.any(axis=1))
-    cols = np.flatnonzero(mask.any(axis=0))
-    area = 100.0 * mask.sum() / mask.size
-    x0, x1 = cols[0] / width, (cols[-1] + 1) / width
-    y0, y1 = rows[0] / height, (rows[-1] + 1) / height
-    return (
-        f"Region covers {area:.1f}% of the image; bounding box x {x0:.2f} to {x1:.2f}, "
-        f"y {y0:.2f} to {y1:.2f} (normalized, origin top-left)."
-    )

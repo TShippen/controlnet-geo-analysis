@@ -16,9 +16,10 @@ from controlnet_mcp.config import MAX_RESOLUTION, MIN_RESOLUTION, Settings
 from controlnet_mcp.images import (
     decode_reference_image,
     image_to_png_bytes,
-    png_note,
+    png_measurement,
     resolve_reference_path,
 )
+from controlnet_mcp.measurements import Measurement
 from controlnet_mcp.model_manager import ModelManager, select_device
 from controlnet_mcp.processors import PROCESSORS, ProcessorSpec, get_processor
 from controlnet_mcp.segmentation import PromptError, RegionPrompt
@@ -32,7 +33,11 @@ class ResolutionError(ValueError):
 
 @dataclass(frozen=True)
 class AnalysisResult:
-    """One generated analysis image plus the facts a tool response reports about it."""
+    """One generated analysis image plus the facts a tool response reports about it.
+
+    ``measurement`` holds the form of the output's measurement that the
+    settings select, and is empty when measurements are switched off.
+    """
 
     kind: str
     resolution: int
@@ -41,7 +46,16 @@ class AnalysisResult:
     width: int
     height: int
     description: str
-    note: str
+    measurement: str
+
+
+@dataclass(frozen=True)
+class _CachedRender:
+    """The facts read back from a cached PNG that is still fit to serve."""
+
+    width: int
+    height: int
+    measurement: Measurement
 
 
 class AnalysisService:
@@ -100,25 +114,24 @@ class AnalysisService:
         digest = image_digest(data)
 
         cached = self.cache.get(digest, spec.kind, spec.version, resolution, variant)
-        cached_size = _png_size(cached) if cached is not None else None
-        if cached is not None and cached_size is not None:
-            width, height = cached_size
+        usable = _usable_cached_render(cached) if cached is not None else None
+        if cached is not None and usable is not None:
             logger.info("Serving cached %s for %s at %d", spec.kind, filename, resolution)
             return AnalysisResult(
                 kind=spec.kind,
                 resolution=resolution,
                 png=cached,
                 from_cache=True,
-                width=width,
-                height=height,
+                width=usable.width,
+                height=usable.height,
                 description=(
                     f"{spec.description} Detection resolution {resolution}. Served from cache."
                 ),
-                note=png_note(cached),
+                measurement=self._selected_form(usable.measurement),
             )
         if cached is not None:
             logger.warning(
-                "Cached %s for %s at %d is unreadable; rendering again",
+                "Cached %s for %s at %d is unreadable or predates measurements; rendering again",
                 spec.kind,
                 filename,
                 resolution,
@@ -129,7 +142,7 @@ class AnalysisService:
             detector = self.model_manager.get(spec)
             logger.info("Running %s on %s at %d", spec.kind, filename, resolution)
             output = spec.run(detector, image, resolution, prompt)
-        png = image_to_png_bytes(output.image, output.note)
+        png = image_to_png_bytes(output.image, output.measurement)
         self.cache.put(digest, spec.kind, spec.version, resolution, png, variant)
         return AnalysisResult(
             kind=spec.kind,
@@ -139,8 +152,21 @@ class AnalysisService:
             width=output.image.width,
             height=output.image.height,
             description=f"{spec.description} Detection resolution {resolution}.",
-            note=output.note,
+            measurement=self._selected_form(output.measurement),
         )
+
+    def _selected_form(self, measurement: Measurement) -> str:
+        """The measurement text the configured verbosity emits.
+
+        Both forms are always computed and cached, so changing the setting
+        changes only what is reported and never invalidates a cached result.
+        """
+        mode = self.settings.result_measurements
+        if mode == "brief":
+            return measurement.brief
+        if mode == "full":
+            return measurement.full
+        return ""
 
     def _validated_resolution(self, resolution: int | None) -> int:
         if resolution is None:
@@ -168,11 +194,20 @@ def _check_prompt(spec: ProcessorSpec, prompt: RegionPrompt | None) -> None:
         )
 
 
-def _png_size(png: bytes) -> tuple[int, int] | None:
-    """Width and height of a cached PNG, or None when the bytes do not decode."""
+def _usable_cached_render(png: bytes) -> _CachedRender | None:
+    """What a cache hit can serve, or None when the file must be rendered again.
+
+    A file that does not decode is unusable. So is one carrying no brief
+    measurement: every render stores one, even when there was nothing to find,
+    so an empty brief means the file was written before analyses were measured.
+    """
     try:
         with Image.open(io.BytesIO(png)) as image:
             image.load()
-            return image.width, image.height
+            width, height = image.width, image.height
     except OSError:
         return None
+    measurement = png_measurement(png)
+    if not measurement.brief:
+        return None
+    return _CachedRender(width=width, height=height, measurement=measurement)

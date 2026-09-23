@@ -6,16 +6,17 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from conftest import write_test_image
+from conftest import SAMPLE_MEASUREMENT, write_test_image
 from controlnet_mcp.images import (
     ReferenceImageError,
     decode_reference_image,
     image_to_png_bytes,
     list_reference_images,
-    png_note,
+    png_measurement,
     read_reference_bytes,
     resolve_reference_path,
 )
+from controlnet_mcp.measurements import EMPTY_MEASUREMENT
 
 
 @pytest.fixture
@@ -132,11 +133,11 @@ def test_image_to_png_bytes_roundtrip() -> None:
     assert Image.open(io.BytesIO(data)).size == (20, 10)
 
 
-def test_png_note_roundtrip() -> None:
+def test_png_measurement_roundtrip() -> None:
     image = Image.new("RGB", (4, 4))
 
-    with_note = image_to_png_bytes(image, "Region covers 25.0% of the image.")
-    without_note = image_to_png_bytes(image)
+    measured = image_to_png_bytes(image, SAMPLE_MEASUREMENT)
+    unmeasured = image_to_png_bytes(image)
 
-    assert png_note(with_note) == "Region covers 25.0% of the image."
-    assert png_note(without_note) == ""
+    assert png_measurement(measured) == SAMPLE_MEASUREMENT
+    assert png_measurement(unmeasured) == EMPTY_MEASUREMENT

@@ -1,11 +1,25 @@
 """Tests for settings loading and directory validation."""
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from controlnet_mcp.config import ConfigurationError, apply_download_policy, load_settings
+
+SETTING_VARIABLES = (
+    "REFERENCE_IMAGE_DIR",
+    "MODEL_DIR",
+    "OUTPUT_DIR",
+    "HF_HOME",
+    "ALLOW_MODEL_DOWNLOADS",
+    "DEFAULT_DETECT_RESOLUTION",
+    "MAX_LOADED_MODELS",
+    "DEVICE",
+    "RESULT_MEASUREMENTS",
+    "HF_HUB_OFFLINE",
+)
 
 
 def write_env(tmp_path: Path, **overrides: str) -> Path:
@@ -25,19 +39,17 @@ def write_env(tmp_path: Path, **overrides: str) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in (
-        "REFERENCE_IMAGE_DIR",
-        "MODEL_DIR",
-        "OUTPUT_DIR",
-        "HF_HOME",
-        "ALLOW_MODEL_DOWNLOADS",
-        "DEFAULT_DETECT_RESOLUTION",
-        "MAX_LOADED_MODELS",
-        "DEVICE",
-        "HF_HUB_OFFLINE",
-    ):
+def clean_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Hide the developer's settings from these tests and from every test that follows.
+
+    ``load_settings`` exports the .env file it reads into the process
+    environment, which other suites would otherwise inherit.
+    """
+    for name in SETTING_VARIABLES:
         monkeypatch.delenv(name, raising=False)
+    yield
+    for name in SETTING_VARIABLES:
+        os.environ.pop(name, None)
 
 
 def test_load_settings_reads_env_file(tmp_path: Path) -> None:
@@ -73,6 +85,19 @@ def test_resolution_out_of_range_rejected(tmp_path: Path) -> None:
     env_file = write_env(tmp_path, DEFAULT_DETECT_RESOLUTION="32")
 
     with pytest.raises(ConfigurationError, match="DEFAULT_DETECT_RESOLUTION"):
+        load_settings(env_file)
+
+
+def test_result_measurements_default_is_brief(tmp_path: Path) -> None:
+    settings = load_settings(write_env(tmp_path))
+
+    assert settings.result_measurements == "brief"
+
+
+def test_result_measurements_rejects_unknown_value(tmp_path: Path) -> None:
+    env_file = write_env(tmp_path, RESULT_MEASUREMENTS="loud")
+
+    with pytest.raises(ConfigurationError, match="RESULT_MEASUREMENTS"):
         load_settings(env_file)
 
 

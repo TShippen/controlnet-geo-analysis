@@ -2,20 +2,23 @@
 
 import base64
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 import torch
 from mcp import Client
 from mcp.types import ImageContent, TextContent
+from PIL import Image
 
-from conftest import write_test_image
+from conftest import SAMPLE_MEASUREMENT, write_test_image
 from controlnet_mcp.analysis import AnalysisService
 from controlnet_mcp.cache import AnalysisCache
 from controlnet_mcp.checkpoints import PREPARE_COMMAND
-from controlnet_mcp.config import Settings
+from controlnet_mcp.config import MeasurementSetting, Settings
 from controlnet_mcp.model_manager import ModelManager
-from controlnet_mcp.processors import PROCESSORS
+from controlnet_mcp.processors import PROCESSORS, AnalysisOutput, ProcessorSpec
+from controlnet_mcp.segmentation import RegionPrompt
 from controlnet_mcp.server import SERVER_INSTRUCTIONS, build_server
 
 MODEL_NAMES = ("Zoe", "MLSD", "SAM", "BAE", "BEiT", "Canny", "ControlNet")
@@ -49,6 +52,47 @@ def service(settings: Settings) -> AnalysisService:
 async def client(settings: Settings, service: AnalysisService) -> AsyncIterator[Client]:
     async with Client(build_server(settings, service)) as connected:
         yield connected
+
+
+@asynccontextmanager
+async def client_measuring(settings: Settings, mode: MeasurementSetting) -> AsyncIterator[Client]:
+    """A client whose server and service both emit measurements at ``mode``."""
+    tuned = settings.model_copy(update={"result_measurements": mode})
+    manager = ModelManager(tuned.model_dir, torch.device("cpu"), max_loaded=1)
+    service = AnalysisService(tuned, manager, AnalysisCache(tuned.output_dir))
+    async with Client(build_server(tuned, service)) as connected:
+        yield connected
+
+
+async def tool_description(client: Client, name: str) -> str:
+    """The description the server advertises for one tool."""
+    tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+    return tools[name].description or ""
+
+
+def fake_segments_spec() -> ProcessorSpec:
+    """Stands in for the segments processor, whose checkpoint the fast suite does not install.
+
+    Its description carries the same "Ask for it" phrasing as the real ones, so
+    a result text can be checked for having dropped the description.
+    """
+
+    def build(model_dir: Path, device: torch.device) -> object:
+        return object()
+
+    def run(
+        detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+    ) -> AnalysisOutput:
+        return AnalysisOutput(Image.new("RGB", (resolution, resolution)), SAMPLE_MEASUREMENT)
+
+    return ProcessorSpec(
+        kind="segments",
+        description="Region outline: the part you pointed at. Ask for it to isolate a component.",
+        checkpoints=(),
+        build=build,
+        run=run,
+        accepts_prompt=True,
+    )
 
 
 async def test_lists_three_tools_with_schemas(client: Client) -> None:
@@ -164,6 +208,53 @@ async def test_analyze_canny_returns_text_and_image(client: Client) -> None:
     assert "canny" in text.text
     assert image.mime_type == "image/png"
     assert result.structured_content is None
+
+
+async def test_off_text_matches_previous_format(settings: Settings) -> None:
+    async with client_measuring(settings, "off") as client:
+        result = await client.call_tool(
+            "analyze_image", {"filename": "chair.png", "analysis": "canny", "resolution": 64}
+        )
+
+    text = result.content[0]
+    assert isinstance(text, TextContent)
+    assert text.text == (
+        f"canny analysis of chair.png (128x64). {PROCESSORS['canny'].description} "
+        "Detection resolution 64."
+    )
+
+
+async def test_brief_text_omits_instructions_and_carries_measurement(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PROCESSORS, "segments", fake_segments_spec())
+
+    async with client_measuring(settings, "brief") as client:
+        result = await client.call_tool(
+            "analyze_image",
+            {
+                "filename": "chair.png",
+                "analysis": "segments",
+                "box": [0.2, 0.2, 0.8, 0.8],
+                "resolution": 64,
+            },
+        )
+
+    text = result.content[0]
+    assert isinstance(text, TextContent)
+    assert "at resolution 64" in text.text
+    assert "Region covers" in text.text
+    assert "Ask for it" not in text.text
+
+
+async def test_description_mentions_measurements_only_when_on(settings: Settings) -> None:
+    async with client_measuring(settings, "off") as off_client:
+        off = await tool_description(off_client, "analyze_image")
+    async with client_measuring(settings, "brief") as brief_client:
+        brief = await tool_description(brief_client, "analyze_image")
+
+    assert "measurements" not in off
+    assert "measurements" in brief
 
 
 async def test_analyze_unknown_kind_is_error(client: Client) -> None:
