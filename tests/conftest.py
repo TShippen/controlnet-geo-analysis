@@ -1,9 +1,15 @@
 """Shared test helpers for the controlnet_mcp suite."""
 
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import pytest
+from dotenv import dotenv_values
 from PIL import Image
+
+from controlnet_mcp.checkpoints import CheckpointSpec, missing_checkpoints
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def write_test_image(
@@ -25,3 +31,26 @@ def write_test_image(
 def anyio_backend() -> str:
     """Run async tests on asyncio via the anyio pytest plugin."""
     return "asyncio"
+
+
+@pytest.fixture
+def installed_checkpoints() -> Callable[[Iterable[CheckpointSpec]], Path]:
+    """Return a function that yields the model directory named by the project .env.
+
+    The .env is read without exporting it into the process, so the fast suite's
+    settings never depend on a developer's local configuration. Calling the
+    returned function skips the test when ``MODEL_DIR`` is unset or any of the
+    given checkpoints is absent.
+    """
+    value = dotenv_values(PROJECT_ROOT / ".env").get("MODEL_DIR")
+
+    def require(specs: Iterable[CheckpointSpec]) -> Path:
+        if not value:
+            pytest.skip("MODEL_DIR is not configured in the project .env")
+        model_dir = Path(value)
+        missing = missing_checkpoints(model_dir, specs)
+        if missing:
+            pytest.skip("Missing checkpoints: " + ", ".join(spec.filename for spec in missing))
+        return model_dir
+
+    return require

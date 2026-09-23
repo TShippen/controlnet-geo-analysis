@@ -33,6 +33,8 @@ def settings(tmp_path: Path) -> Settings:
         model_dir=tmp_path / "models",
         output_dir=tmp_path / "outputs",
         default_detect_resolution=64,
+        max_loaded_models=1,
+        device="cpu",
     )
 
 

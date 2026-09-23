@@ -1,6 +1,8 @@
 """Tests for the analysis service: validation, caching, and processor dispatch."""
 
 import io
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -69,6 +71,8 @@ def settings(tmp_path: Path) -> Settings:
         model_dir=tmp_path / "models",
         output_dir=tmp_path / "outputs",
         default_detect_resolution=128,
+        max_loaded_models=1,
+        device="cpu",
     )
 
 
@@ -198,3 +202,63 @@ def test_note_survives_cache(
     assert fresh.note == f"Region from {prompt.digest()}."
     assert cached.note == fresh.note
     assert cached.from_cache is True
+
+
+class StatefulDetector:
+    """Stand-in for a detector that keeps per-image state between two steps of a run."""
+
+    def __init__(self) -> None:
+        self.current: tuple[int, int, int] | None = None
+
+
+def make_stateful_spec(kind: str) -> ProcessorSpec:
+    """A prompted processor whose run reads back state set earlier in the same run."""
+
+    def build(model_dir: Path, device: torch.device) -> object:
+        return StatefulDetector()
+
+    def run(
+        detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+    ) -> AnalysisOutput:
+        assert isinstance(detector, StatefulDetector)
+        detector.current = image.getpixel((0, 0))
+        time.sleep(0.05)
+        return AnalysisOutput(Image.new("RGB", (4, 4), detector.current), "")
+
+    return ProcessorSpec(
+        kind=kind,
+        description="Stateful fake.",
+        checkpoints=(),
+        build=build,
+        run=run,
+        accepts_prompt=True,
+    )
+
+
+def test_concurrent_analyses_do_not_share_detector_state(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    detector = StatefulDetector()
+    spec = make_stateful_spec("fake")
+    monkeypatch.setitem(PROCESSORS, "fake", spec)
+    manager = ModelManager(settings.model_dir, torch.device("cpu"), max_loaded=1)
+    monkeypatch.setattr(manager, "get", lambda requested: detector)
+    service = AnalysisService(settings, manager, AnalysisCache(settings.output_dir))
+    colors = {"red.png": (200, 0, 0), "blue.png": (0, 0, 200)}
+    for name, color in colors.items():
+        write_test_image(settings.reference_image_dir / name, size=(8, 8), color=color)
+    results: dict[str, tuple[int, int, int]] = {}
+    prompt = RegionPrompt.from_lists(None, [0.5, 0.5])
+
+    def analyze(name: str) -> None:
+        result = service.analyze(name, "fake", 64, prompt)
+        pixel = Image.open(io.BytesIO(result.png)).getpixel((0, 0))
+        results[name] = pixel  # type: ignore[assignment]
+
+    threads = [threading.Thread(target=analyze, args=(name,)) for name in colors]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert results == colors

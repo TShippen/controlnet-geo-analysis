@@ -136,8 +136,7 @@ class ModelManager:
             if missing:
                 raise MissingCheckpointError(missing)
             while len(self._loaded) >= self._max_loaded:
-                evicted_kind, evicted_model = self._loaded.popitem(last=False)
-                self._release(evicted_kind, evicted_model)
+                self._release(next(iter(self._loaded)))
             model = spec.build(self._model_dir, self._device)
             self._loaded[spec.kind] = model
             logger.info("Loaded %s detector on %s", spec.kind, self._device)
@@ -146,20 +145,23 @@ class ModelManager:
     def unload(self, kind: str) -> None:
         """Release the detector cached for ``kind``, doing nothing when none is."""
         with self._lock:
-            model = self._loaded.pop(kind, None)
-            if model is None:
-                return
-            self._release(kind, model)
+            if kind in self._loaded:
+                self._release(kind)
 
     def unload_all(self) -> None:
         """Release every resident detector."""
         with self._lock:
             for kind in list(self._loaded):
-                self.unload(kind)
+                self._release(kind)
 
-    def _release(self, kind: str, model: object) -> None:
-        """Drop the last reference to a detector and reclaim accelerator memory."""
-        del model
+    def _release(self, kind: str) -> None:
+        """Drop the cache's reference to a detector and reclaim its memory.
+
+        The popped object is never bound to a name, so the cache entry was the
+        last reference and the collector can free it before the caller loads a
+        replacement.
+        """
+        self._loaded.pop(kind)
         gc.collect()
         if self._device.type == "cuda":
             torch.cuda.empty_cache()

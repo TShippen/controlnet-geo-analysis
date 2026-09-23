@@ -1,23 +1,21 @@
 """End-to-end run of every analysis through the MCP client with real checkpoints.
 
-Uses the directories named in the project's .env file and skips when the
+Uses the model directory named in the project's .env file and skips when the
 checkpoints are not installed there.
 """
 
-import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Iterable
 from pathlib import Path
 
 import pytest
 import torch
-from dotenv import load_dotenv
 from mcp import Client
 from mcp.types import ImageContent, TextContent
 
 from conftest import write_test_image
 from controlnet_mcp.analysis import AnalysisService
 from controlnet_mcp.cache import AnalysisCache
-from controlnet_mcp.checkpoints import REQUIRED_CHECKPOINTS, missing_checkpoints
+from controlnet_mcp.checkpoints import REQUIRED_CHECKPOINTS, CheckpointSpec
 from controlnet_mcp.config import Settings
 from controlnet_mcp.model_manager import ModelManager
 from controlnet_mcp.processors import ANALYSIS_KINDS
@@ -25,23 +23,11 @@ from controlnet_mcp.server import build_server
 
 pytestmark = [pytest.mark.anyio, pytest.mark.slow, pytest.mark.integration]
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-
-def installed_model_dir() -> Path:
-    load_dotenv(PROJECT_ROOT / ".env")
-    value = os.environ.get("MODEL_DIR")
-    if value is None:
-        pytest.skip("MODEL_DIR is not configured")
-    model_dir = Path(value)
-    if missing_checkpoints(model_dir, REQUIRED_CHECKPOINTS):
-        pytest.skip(f"Checkpoints are not installed under {model_dir}")
-    return model_dir
-
 
 @pytest.fixture
-def manager(tmp_path: Path) -> ModelManager:
-    return ModelManager(installed_model_dir(), torch.device("cpu"), max_loaded=1)
+def manager(installed_checkpoints: Callable[[Iterable[CheckpointSpec]], Path]) -> ModelManager:
+    model_dir = installed_checkpoints(REQUIRED_CHECKPOINTS)
+    return ModelManager(model_dir, torch.device("cpu"), max_loaded=1)
 
 
 @pytest.fixture
@@ -55,6 +41,7 @@ def settings(tmp_path: Path, manager: ModelManager) -> Settings:
         output_dir=tmp_path / "outputs",
         default_detect_resolution=64,
         max_loaded_models=1,
+        device="cpu",
     )
 
 

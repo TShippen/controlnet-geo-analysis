@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from controlnet_mcp.config import ConfigurationError, load_settings
+from controlnet_mcp.config import ConfigurationError, apply_download_policy, load_settings
 
 
 def write_env(tmp_path: Path, **overrides: str) -> Path:
@@ -35,6 +35,7 @@ def clean_environment(monkeypatch: pytest.MonkeyPatch) -> None:
         "DEFAULT_DETECT_RESOLUTION",
         "MAX_LOADED_MODELS",
         "DEVICE",
+        "HF_HUB_OFFLINE",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -83,3 +84,19 @@ def test_load_settings_exports_hf_home(tmp_path: Path) -> None:
 
     assert os.environ["HF_HOME"] == str(hf_home)
     assert settings.hf_home == hf_home.resolve()
+
+
+def test_download_policy_exports_offline_flag(tmp_path: Path) -> None:
+    settings = load_settings(write_env(tmp_path))
+
+    apply_download_policy(settings)
+
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
+
+
+def test_download_policy_leaves_environment_when_allowed(tmp_path: Path) -> None:
+    settings = load_settings(write_env(tmp_path, ALLOW_MODEL_DOWNLOADS="true"))
+
+    apply_download_policy(settings)
+
+    assert "HF_HUB_OFFLINE" not in os.environ

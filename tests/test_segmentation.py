@@ -1,15 +1,15 @@
 """Tests for region prompts, overlay rendering, and the prompted segmenter."""
 
-import os
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
-from dotenv import load_dotenv
+from controlnet_aux.segment_anything.build_sam import sam_model_registry
 from PIL import Image
 
-from controlnet_mcp.checkpoints import MOBILE_SAM_CHECKPOINT, missing_checkpoints
+from controlnet_mcp.checkpoints import MOBILE_SAM_CHECKPOINT, CheckpointSpec, checkpoint_path
 from controlnet_mcp.segmentation import (
     PromptedSegmenter,
     PromptError,
@@ -89,14 +89,12 @@ def test_overlay_changes_only_masked_pixels() -> None:
 
 @pytest.mark.slow
 @pytest.mark.integration
-def test_segmenter_reuses_embedding() -> None:
-    load_dotenv(Path(__file__).resolve().parents[1] / ".env")
-    model_dir = Path(os.environ.get("MODEL_DIR", ""))
-    if not os.environ.get("MODEL_DIR") or missing_checkpoints(model_dir, [MOBILE_SAM_CHECKPOINT]):
-        pytest.skip("MobileSAM checkpoint is not installed")
-    from controlnet_aux.segment_anything.build_sam import sam_model_registry
-
-    sam = sam_model_registry["vit_t"](checkpoint=str(model_dir / "mobile_sam" / "mobile_sam.pt"))
+def test_segmenter_reuses_embedding(
+    installed_checkpoints: Callable[[Iterable[CheckpointSpec]], Path],
+) -> None:
+    model_dir = installed_checkpoints([MOBILE_SAM_CHECKPOINT])
+    weights = checkpoint_path(model_dir, MOBILE_SAM_CHECKPOINT)
+    sam = sam_model_registry["vit_t"](checkpoint=str(weights))
     segmenter = PromptedSegmenter(sam, torch.device("cpu"))
     set_image_calls = 0
     original_set_image = segmenter.predictor.set_image

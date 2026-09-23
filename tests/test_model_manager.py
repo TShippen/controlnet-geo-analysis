@@ -1,5 +1,6 @@
 """Tests for device selection and the bounded detector cache."""
 
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -103,6 +104,35 @@ def test_get_evicts_least_recently_used(tmp_path: Path) -> None:
     manager.get(normals)
 
     assert manager.loaded_kinds == ["normals"]
+
+
+class FakeModel:
+    """Weak-referenceable stand-in for a loaded detector."""
+
+
+def test_evicted_model_is_freed_before_replacement_builds(tmp_path: Path) -> None:
+    depth = FakeProcessorSpec(
+        kind="depth",
+        checkpoints=(write_test_checkpoint(tmp_path, "depth.pt"),),
+        build=lambda model_dir, device: FakeModel(),
+    )
+    manager = ModelManager(tmp_path, torch.device("cpu"), max_loaded=1)
+    depth_ref = weakref.ref(manager.get(depth))
+    alive_at_build: list[bool] = []
+
+    def build_normals(model_dir: Path, device: torch.device) -> object:
+        alive_at_build.append(depth_ref() is not None)
+        return object()
+
+    normals = FakeProcessorSpec(
+        kind="normals",
+        checkpoints=(write_test_checkpoint(tmp_path, "normals.pt"),),
+        build=build_normals,
+    )
+
+    manager.get(normals)
+
+    assert alive_at_build == [False]
 
 
 def test_get_respects_max_loaded_two(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ exceptions into tool errors.
 
 import io
 import logging
+import threading
 from dataclasses import dataclass
 
 from PIL import Image
@@ -44,7 +45,13 @@ class AnalysisResult:
 
 
 class AnalysisService:
-    """Runs analyses over reference images with disk caching and lazy model loading."""
+    """Runs analyses over reference images with disk caching and lazy model loading.
+
+    Inference is serialized: the MCP SDK runs tool calls on worker threads, the
+    detectors hold mutable state during a run (the segmenter keeps one image
+    embedding), and the resident-model bound only holds when a model cannot be
+    evicted while another thread is still using it.
+    """
 
     def __init__(
         self, settings: Settings, model_manager: ModelManager, cache: AnalysisCache
@@ -52,6 +59,7 @@ class AnalysisService:
         self.settings = settings
         self.model_manager = model_manager
         self.cache = cache
+        self._inference_lock = threading.Lock()
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "AnalysisService":
@@ -108,9 +116,10 @@ class AnalysisService:
             )
 
         image = load_reference_image(self.settings.reference_image_dir, filename)
-        detector = self.model_manager.get(spec)
-        logger.info("Running %s on %s at %d", spec.kind, filename, resolution)
-        output = spec.run(detector, image, resolution, prompt)
+        with self._inference_lock:
+            detector = self.model_manager.get(spec)
+            logger.info("Running %s on %s at %d", spec.kind, filename, resolution)
+            output = spec.run(detector, image, resolution, prompt)
         png = image_to_png_bytes(output.image, output.note)
         self.cache.put(digest, spec.kind, resolution, png, variant)
         return AnalysisResult(

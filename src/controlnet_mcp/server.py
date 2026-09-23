@@ -15,7 +15,7 @@ from mcp.types import ToolAnnotations
 
 from controlnet_mcp import images
 from controlnet_mcp.analysis import AnalysisService, ResolutionError
-from controlnet_mcp.config import Settings, load_settings
+from controlnet_mcp.config import Settings, apply_download_policy, load_settings
 from controlnet_mcp.images import ReferenceImageError, ReferenceImageInfo
 from controlnet_mcp.model_manager import MissingCheckpointError
 from controlnet_mcp.processors import AnalysisKind, UnknownAnalysisError
@@ -131,6 +131,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     settings = load_settings()
+    apply_download_policy(settings)
     server = build_server(settings)
     logger.info("Starting %s over stdio", SERVER_NAME)
     server.run(transport="stdio")

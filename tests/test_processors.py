@@ -5,15 +5,14 @@ tests, which skip unless the checkpoints named by their spec are present
 under the configured ``MODEL_DIR``.
 """
 
-import os
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 import pytest
 import torch
-from dotenv import load_dotenv
 from PIL import Image, ImageDraw
 
-from controlnet_mcp.checkpoints import missing_checkpoints
+from controlnet_mcp.checkpoints import CheckpointSpec
 from controlnet_mcp.processors import (
     ANALYSIS_KINDS,
     PROCESSORS,
@@ -23,14 +22,6 @@ from controlnet_mcp.processors import (
 from controlnet_mcp.segmentation import RegionPrompt
 
 LEARNED_KINDS = ("depth", "normals", "lineart", "lines", "segments")
-
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
-
-
-def configured_model_dir() -> Path | None:
-    """The checkpoint directory from the environment, or None when unset."""
-    value = os.environ.get("MODEL_DIR")
-    return Path(value) if value else None
 
 
 def structured_test_image(size: tuple[int, int]) -> Image.Image:
@@ -86,14 +77,11 @@ def test_canny_run_produces_rgb_at_resolution() -> None:
 @pytest.mark.slow
 @pytest.mark.integration
 @pytest.mark.parametrize("kind", LEARNED_KINDS)
-def test_learned_processor_produces_rgb_at_resolution(kind: str) -> None:
+def test_learned_processor_produces_rgb_at_resolution(
+    kind: str, installed_checkpoints: Callable[[Iterable[CheckpointSpec]], Path]
+) -> None:
     spec = get_processor(kind)
-    model_dir = configured_model_dir()
-    if model_dir is None:
-        pytest.skip("MODEL_DIR is not set; configure it in .env to run the learned model tests.")
-    missing = missing_checkpoints(model_dir, spec.checkpoints)
-    if missing:
-        pytest.skip("Missing checkpoints: " + ", ".join(item.filename for item in missing))
+    model_dir = installed_checkpoints(spec.checkpoints)
 
     detector = spec.build(model_dir, torch.device("cpu"))
     prompt = RegionPrompt.from_lists([0.2, 0.2, 0.8, 0.8], None) if spec.accepts_prompt else None

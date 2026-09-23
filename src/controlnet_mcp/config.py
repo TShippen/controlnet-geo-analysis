@@ -6,6 +6,7 @@ Hugging Face's ``HF_HOME``, observe the same values.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -45,7 +46,10 @@ class Settings(BaseSettings):
     )
     allow_model_downloads: bool = Field(
         default=False,
-        description="Whether normal server operation may download checkpoints. Kept false for v1.",
+        description=(
+            "Whether the running server may contact the Hugging Face hub. When false, "
+            "HF_HUB_OFFLINE is exported at startup so any hub access fails instead of downloading."
+        ),
     )
     default_detect_resolution: int = Field(
         default=512,
@@ -106,6 +110,18 @@ def load_settings(env_file: Path | None = None) -> Settings:
         settings.max_loaded_models,
     )
     return settings
+
+
+def apply_download_policy(settings: Settings) -> None:
+    """Export ``HF_HUB_OFFLINE=1`` when the settings forbid downloads.
+
+    Called by the server before any model is built, not by the preparation
+    command, which exists to download.
+    """
+    if settings.allow_model_downloads:
+        return
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    logger.info("Model downloads disabled; HF_HUB_OFFLINE=1 exported")
 
 
 def _describe_validation_error(exc: ValidationError) -> str:
