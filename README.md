@@ -63,10 +63,16 @@ The command downloads about 1.8 GB into `MODEL_DIR` and is safe to rerun; existi
 skipped. `--check` reports what is missing without downloading. If a tool is called before its
 checkpoint is installed, the tool returns an error naming the file and this command.
 
-On Linux, `pyproject.toml` pins torch to the CPU wheel index to keep the install small. To use a
-CUDA build on Linux, remove the `[tool.uv.sources]` entries for torch and torchvision and run
-`uv sync` again. macOS and Windows already use the default PyPI wheels, so Apple MPS works
-without changes. `DEVICE=auto` picks CUDA, then MPS, then CPU.
+On Linux, the CPU build of torch is the default, so a plain `uv sync` and `uv run` stay small. A
+CUDA machine sets `UV_NO_GROUP=cpu`, either in its shell or in the MCP host config's env block, and
+`uv sync` and `uv run` then install the CUDA build from PyPI instead. The variable is the switch,
+so running without it goes back to the CPU build. macOS and Windows use PyPI wheels either way, so
+Apple MPS needs no configuration. `DEVICE=auto` picks CUDA, then MPS, then CPU.
+
+```bash
+export UV_NO_GROUP=cpu
+uv sync
+```
 
 ## Running
 

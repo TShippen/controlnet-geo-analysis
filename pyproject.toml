@@ -34,8 +34,12 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [tool.uv.sources]
-torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
-torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torch = [{ index = "pytorch-cpu", group = "cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", group = "cpu", marker = "sys_platform == 'linux'" }]
+
+[tool.uv]
+default-groups = ["dev", "cpu"]
+conflicts = [[{ group = "cpu" }, { group = "cuda" }]]
 
 [dependency-groups]
 dev = [
@@ -43,6 +47,14 @@ dev = [
     "mypy>=2.3.1",
     "pytest>=9.1.1",
     "ruff>=0.16.8",
+]
+cpu = [
+    "torch>=2.14.0",
+    "torchvision>=0.29.0",
+]
+cuda = [
+    "torch>=2.14.0",
+    "torchvision>=0.29.0",
 ]
 
 [tool.pytest.ini_options]
