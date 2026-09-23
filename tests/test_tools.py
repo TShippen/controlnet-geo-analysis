@@ -15,6 +15,7 @@ from controlnet_mcp.cache import AnalysisCache
 from controlnet_mcp.checkpoints import PREPARE_COMMAND
 from controlnet_mcp.config import Settings
 from controlnet_mcp.model_manager import ModelManager
+from controlnet_mcp.processors import PROCESSORS
 from controlnet_mcp.server import SERVER_INSTRUCTIONS, build_server
 
 MODEL_NAMES = ("Zoe", "MLSD", "SAM", "BAE", "BEiT", "Canny", "ControlNet")
@@ -70,12 +71,13 @@ async def test_analyze_schema_has_box_and_point(client: Client) -> None:
     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
     properties = tools["analyze_image"].input_schema["properties"]
-    assert "box" in properties
-    assert "point" in properties
+    assert "fractions" in properties["box"]["description"]
+    assert "fractions" in properties["point"]["description"]
+    assert "segments" in tools["analyze_image"].description
 
 
 async def test_agent_facing_text_has_no_model_names(client: Client) -> None:
-    texts = [SERVER_INSTRUCTIONS]
+    texts = [SERVER_INSTRUCTIONS, *(spec.description for spec in PROCESSORS.values())]
     for tool in (await client.list_tools()).tools:
         texts.append(tool.description or "")
         for field in tool.input_schema["properties"].values():

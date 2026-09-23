@@ -204,6 +204,18 @@ def test_note_survives_cache(
     assert cached.from_cache is True
 
 
+def test_unreadable_cache_file_is_rendered_again(service: AnalysisService, reference: str) -> None:
+    first = service.analyze(reference, "canny", 64)
+    cache_path = next(service.settings.output_dir.rglob("canny-64.png"))
+    cache_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"truncated")
+
+    result = service.analyze(reference, "canny", 64)
+
+    assert result.from_cache is False
+    assert result.png == first.png
+    assert cache_path.read_bytes() == first.png
+
+
 class StatefulDetector:
     """Stand-in for a detector that keeps per-image state between two steps of a run."""
 

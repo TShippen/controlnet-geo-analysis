@@ -41,7 +41,8 @@ cp .env.example .env
 ```
 
 Edit `.env` to point at three directories. `REFERENCE_IMAGE_DIR` and `MODEL_DIR` must exist;
-`OUTPUT_DIR` is created on first use. See `.env.example` for every variable.
+`OUTPUT_DIR` is created on first use. See `.env.example` for every variable. `HF_HOME` only
+affects the preparation command; the running server never touches the Hugging Face cache.
 
 Then install the checkpoints once. This is the only step that touches the network:
 
@@ -104,6 +105,7 @@ prompt as well, and the note about the region travels inside the PNG's text chun
 uv run pytest -m "not slow and not integration"   # fast suite, no models needed
 uv run pytest -m "slow or integration"            # runs every real processor on CPU
 uv run ruff check src tests
+uv run mypy src
 ```
 
 The slow tests skip themselves when checkpoints are absent from the `MODEL_DIR` named in `.env`.

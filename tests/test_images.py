@@ -1,5 +1,6 @@
 """Tests for confined reference image access."""
 
+import io
 from pathlib import Path
 
 import pytest
@@ -8,9 +9,9 @@ from PIL import Image
 from conftest import write_test_image
 from controlnet_mcp.images import (
     ReferenceImageError,
+    decode_reference_image,
     image_to_png_bytes,
     list_reference_images,
-    load_reference_image,
     png_note,
     read_reference_bytes,
     resolve_reference_path,
@@ -42,6 +43,14 @@ def test_list_skips_subdirectories(reference_dir: Path) -> None:
     write_test_image(nested / "inner.png")
 
     assert list_reference_images(reference_dir) == []
+
+
+def test_list_skips_symlink_escape(reference_dir: Path, tmp_path: Path) -> None:
+    outside = write_test_image(tmp_path / "outside.png")
+    (reference_dir / "link.png").symlink_to(outside)
+    write_test_image(reference_dir / "inside.png")
+
+    assert [entry.filename for entry in list_reference_images(reference_dir)] == ["inside.png"]
 
 
 def test_list_skips_unreadable_files(reference_dir: Path) -> None:
@@ -101,12 +110,17 @@ def test_read_reference_bytes_returns_mime(reference_dir: Path) -> None:
     assert data[:2] == b"\xff\xd8"
 
 
-def test_load_reference_image_converts_to_rgb(reference_dir: Path) -> None:
-    write_test_image(reference_dir / "alpha.png", color=(1, 2, 3, 128), mode="RGBA")
+def test_decode_reference_image_converts_to_rgb(reference_dir: Path) -> None:
+    path = write_test_image(reference_dir / "alpha.png", color=(1, 2, 3, 128), mode="RGBA")
 
-    image = load_reference_image(reference_dir, "alpha.png")
+    image = decode_reference_image(path.read_bytes(), "alpha.png")
 
     assert image.mode == "RGB"
+
+
+def test_decode_reference_image_rejects_garbage() -> None:
+    with pytest.raises(ReferenceImageError, match="decoded"):
+        decode_reference_image(b"not an image", "bad.png")
 
 
 def test_image_to_png_bytes_roundtrip() -> None:
@@ -115,7 +129,7 @@ def test_image_to_png_bytes_roundtrip() -> None:
     data = image_to_png_bytes(image)
 
     assert data[:8] == b"\x89PNG\r\n\x1a\n"
-    assert Image.open(__import__("io").BytesIO(data)).size == (20, 10)
+    assert Image.open(io.BytesIO(data)).size == (20, 10)
 
 
 def test_png_note_roundtrip() -> None:

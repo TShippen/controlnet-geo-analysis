@@ -45,6 +45,8 @@ def download_checkpoint(
         logger.info("Checkpoint present: %s", target)
         return target
     if download is None:
+        # Imported here, not at module top, so the .env loaded by main() is in the
+        # environment before huggingface_hub reads HF_HOME at import time.
         from huggingface_hub import hf_hub_download
 
         download = hf_hub_download

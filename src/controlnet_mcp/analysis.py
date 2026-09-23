@@ -14,13 +14,13 @@ from PIL import Image
 from controlnet_mcp.cache import AnalysisCache, image_digest
 from controlnet_mcp.config import MAX_RESOLUTION, MIN_RESOLUTION, Settings
 from controlnet_mcp.images import (
+    decode_reference_image,
     image_to_png_bytes,
-    load_reference_image,
     png_note,
     resolve_reference_path,
 )
 from controlnet_mcp.model_manager import ModelManager, select_device
-from controlnet_mcp.processors import ProcessorSpec, get_processor
+from controlnet_mcp.processors import PROCESSORS, ProcessorSpec, get_processor
 from controlnet_mcp.segmentation import PromptError, RegionPrompt
 
 logger = logging.getLogger(__name__)
@@ -96,11 +96,13 @@ class AnalysisService:
         _check_prompt(spec, prompt)
         variant = prompt.digest() if prompt is not None else None
         path = resolve_reference_path(self.settings.reference_image_dir, filename)
-        digest = image_digest(path.read_bytes())
+        data = path.read_bytes()
+        digest = image_digest(data)
 
         cached = self.cache.get(digest, spec.kind, resolution, variant)
-        if cached is not None:
-            width, height = _png_size(cached)
+        cached_size = _png_size(cached) if cached is not None else None
+        if cached is not None and cached_size is not None:
+            width, height = cached_size
             logger.info("Serving cached %s for %s at %d", spec.kind, filename, resolution)
             return AnalysisResult(
                 kind=spec.kind,
@@ -114,8 +116,15 @@ class AnalysisService:
                 ),
                 note=png_note(cached),
             )
+        if cached is not None:
+            logger.warning(
+                "Cached %s for %s at %d is unreadable; rendering again",
+                spec.kind,
+                filename,
+                resolution,
+            )
 
-        image = load_reference_image(self.settings.reference_image_dir, filename)
+        image = decode_reference_image(data, filename)
         with self._inference_lock:
             detector = self.model_manager.get(spec)
             logger.info("Running %s on %s at %d", spec.kind, filename, resolution)
@@ -152,12 +161,18 @@ def _check_prompt(spec: ProcessorSpec, prompt: RegionPrompt | None) -> None:
             "saying where to look."
         )
     if not spec.accepts_prompt and prompt is not None:
+        prompted = ", ".join(kind for kind, entry in PROCESSORS.items() if entry.accepts_prompt)
         raise PromptError(
             f"The {spec.kind} analysis covers the whole image; box and point apply only to "
-            "segments."
+            f"{prompted}."
         )
 
 
-def _png_size(png: bytes) -> tuple[int, int]:
-    with Image.open(io.BytesIO(png)) as image:
-        return image.width, image.height
+def _png_size(png: bytes) -> tuple[int, int] | None:
+    """Width and height of a cached PNG, or None when the bytes do not decode."""
+    try:
+        with Image.open(io.BytesIO(png)) as image:
+            image.load()
+            return image.width, image.height
+    except OSError:
+        return None

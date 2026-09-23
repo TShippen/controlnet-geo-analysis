@@ -76,16 +76,20 @@ def resolve_reference_path(directory: Path, filename: str) -> Path:
 
 
 def list_reference_images(directory: Path) -> list[ReferenceImageInfo]:
-    """Describe every supported image directly inside ``directory``, sorted by filename.
+    """Describe every image directly inside ``directory``, sorted by filename.
 
-    Files that Pillow cannot identify are skipped with a warning.
+    An entry is listed only when ``resolve_reference_path`` would accept its
+    name, so the listing and the fetch apply one rule. Files that Pillow
+    cannot identify are skipped with a warning.
     """
     entries: list[ReferenceImageInfo] = []
     for path in sorted(directory.iterdir(), key=lambda item: item.name):
-        if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        try:
+            resolved = resolve_reference_path(directory, path.name)
+        except ReferenceImageError:
             continue
         try:
-            with Image.open(path) as image:
+            with Image.open(resolved) as image:
                 entries.append(
                     ReferenceImageInfo(
                         filename=path.name,
@@ -105,11 +109,18 @@ def read_reference_bytes(directory: Path, filename: str) -> tuple[bytes, str]:
     return path.read_bytes(), _MIME_TYPES[path.suffix.lower()]
 
 
-def load_reference_image(directory: Path, filename: str) -> Image.Image:
-    """Load a reference image fully decoded in RGB mode."""
-    path = resolve_reference_path(directory, filename)
+def decode_reference_image(data: bytes, filename: str) -> Image.Image:
+    """Decode reference image bytes to RGB.
+
+    Args:
+        data: The file contents, as returned by ``read_reference_bytes``.
+        filename: Used only to name the image in the error message.
+
+    Raises:
+        ReferenceImageError: When the bytes are not a decodable image.
+    """
     try:
-        with Image.open(path) as image:
+        with Image.open(io.BytesIO(data)) as image:
             return image.convert("RGB")
     except (UnidentifiedImageError, OSError) as exc:
         raise ReferenceImageError(f"Reference image {filename!r} could not be decoded.") from exc
