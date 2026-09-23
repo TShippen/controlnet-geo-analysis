@@ -48,7 +48,7 @@ def settings(tmp_path: Path, manager: ModelManager) -> Settings:
 @pytest.fixture
 async def client(settings: Settings, manager: ModelManager) -> AsyncIterator[Client]:
     service = AnalysisService(settings, manager, AnalysisCache(settings.output_dir))
-    async with Client(build_server(settings, service)) as connected:
+    async with Client(build_server(service)) as connected:
         yield connected
 
 

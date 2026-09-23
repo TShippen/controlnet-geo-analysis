@@ -17,12 +17,7 @@ from pydantic import Field
 
 from controlnet_mcp import images
 from controlnet_mcp.analysis import AnalysisResult, AnalysisService, ResolutionError
-from controlnet_mcp.config import (
-    MeasurementSetting,
-    Settings,
-    apply_download_policy,
-    load_settings,
-)
+from controlnet_mcp.config import MeasurementSetting, apply_download_policy, load_settings
 from controlnet_mcp.images import ReferenceImageError, ReferenceImageInfo
 from controlnet_mcp.model_manager import MissingCheckpointError
 from controlnet_mcp.processors import PROCESSORS, AnalysisKind, UnknownAnalysisError
@@ -48,19 +43,18 @@ _EXPECTED_ERRORS = (
 )
 
 
-def build_server(settings: Settings, service: AnalysisService | None = None) -> MCPServer:
-    """Create the MCP server with its three tools bound to ``settings``.
-
-    Args:
-        settings: Validated configuration.
-        service: An analysis service to reuse; built from ``settings`` when omitted.
+def build_server(service: AnalysisService) -> MCPServer:
+    """Create the MCP server with its three tools bound to ``service``.
 
     The measurement setting is read off the service, which selects the form of
     every measurement it reports, so the tool description and the result text
     describe the same service.
+
+    Args:
+        service: The analysis service backing ``analyze_image``, and the
+            source of the configuration every tool reads.
     """
-    analysis_service = service if service is not None else AnalysisService.from_settings(settings)
-    measurement_mode = analysis_service.settings.result_measurements
+    measurement_mode = service.settings.result_measurements
     mcp = MCPServer(SERVER_NAME, instructions=SERVER_INSTRUCTIONS)
     read_only = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 
@@ -70,7 +64,7 @@ def build_server(settings: Settings, service: AnalysisService | None = None) -> 
 
         Returns each file's name, width, height, and format.
         """
-        return images.list_reference_images(settings.reference_image_dir)
+        return images.list_reference_images(service.settings.reference_image_dir)
 
     @mcp.tool(annotations=read_only)
     def get_reference_image(
@@ -82,7 +76,7 @@ def build_server(settings: Settings, service: AnalysisService | None = None) -> 
         you want a region segmented.
         """
         try:
-            data, mime = images.read_reference_bytes(settings.reference_image_dir, filename)
+            data, mime = images.read_reference_bytes(service.settings.reference_image_dir, filename)
         except ReferenceImageError as exc:
             raise ToolError(str(exc)) from exc
         return Image(data=data, format=mime.removeprefix("image/"))
@@ -129,7 +123,7 @@ def build_server(settings: Settings, service: AnalysisService | None = None) -> 
             prompt = None
             if box is not None or point is not None:
                 prompt = RegionPrompt.from_lists(box, point)
-            result = analysis_service.analyze(filename, analysis, resolution, prompt)
+            result = service.analyze(filename, analysis, resolution, prompt)
         except _EXPECTED_ERRORS as exc:
             raise ToolError(str(exc)) from exc
         text = _result_text(result, filename, measurement_mode)
@@ -185,7 +179,8 @@ def main() -> None:
     )
     settings = load_settings()
     apply_download_policy(settings)
-    server = build_server(settings)
+    service = AnalysisService.from_settings(settings)
+    server = build_server(service)
     logger.info("Starting %s over stdio", SERVER_NAME)
     server.run(transport="stdio")
 

@@ -50,7 +50,7 @@ def service(settings: Settings) -> AnalysisService:
 
 @pytest.fixture
 async def client(settings: Settings, service: AnalysisService) -> AsyncIterator[Client]:
-    async with Client(build_server(settings, service)) as connected:
+    async with Client(build_server(service)) as connected:
         yield connected
 
 
@@ -60,7 +60,7 @@ async def client_measuring(settings: Settings, mode: MeasurementSetting) -> Asyn
     tuned = settings.model_copy(update={"result_measurements": mode})
     manager = ModelManager(tuned.model_dir, torch.device("cpu"), max_loaded=1)
     service = AnalysisService(tuned, manager, AnalysisCache(tuned.output_dir))
-    async with Client(build_server(tuned, service)) as connected:
+    async with Client(build_server(service)) as connected:
         yield connected
 
 
@@ -270,17 +270,16 @@ async def test_off_keeps_the_description_and_drops_the_measurement(
     assert SAMPLE_MEASUREMENT.brief not in text.text
 
 
-async def test_measurement_mode_follows_the_service(
+async def test_measurement_mode_follows_the_only_settings(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The service's settings decide the mode, even when the server was handed other settings."""
+    """The server has one source of configuration: the service it was built from."""
     monkeypatch.setitem(PROCESSORS, "segments", fake_segments_spec())
     measuring = settings.model_copy(update={"result_measurements": "full"})
     manager = ModelManager(measuring.model_dir, torch.device("cpu"), max_loaded=1)
     service = AnalysisService(measuring, manager, AnalysisCache(measuring.output_dir))
-    silent = settings.model_copy(update={"result_measurements": "off"})
 
-    async with Client(build_server(silent, service)) as client:
+    async with Client(build_server(service)) as client:
         result = await client.call_tool(
             "analyze_image",
             {
