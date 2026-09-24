@@ -164,6 +164,14 @@ def test_lines_maps_endpoints_into_the_crop() -> None:
     assert "(0.50,0.50)-(1.00,0.50)" in measurement.brief
 
 
+def test_lines_long_only_says_long() -> None:
+    segments = [[0.0, 0.0, 50.0, 0.0], [0.0, 10.0, 20.0, 10.0]]
+
+    measurement = measure_lines(segments, 100, 100, long_only=True)
+
+    assert measurement.brief.startswith("2 long straight edges;")
+
+
 def test_lines_empty() -> None:
     measurement = measure_lines([], 100, 100)
 

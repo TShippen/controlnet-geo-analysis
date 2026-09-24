@@ -20,7 +20,14 @@ from controlnet_mcp.analysis import AnalysisResult, AnalysisService, ResolutionE
 from controlnet_mcp.config import MeasurementSetting, apply_download_policy, load_settings
 from controlnet_mcp.images import ReferenceImageError, ReferenceImageInfo
 from controlnet_mcp.model_manager import MissingCheckpointError
-from controlnet_mcp.processors import PROCESSORS, AnalysisKind, UnknownAnalysisError
+from controlnet_mcp.processors import (
+    PROCESSORS,
+    AnalysisKind,
+    AnalysisOptions,
+    LineLength,
+    OptionError,
+    UnknownAnalysisError,
+)
 from controlnet_mcp.regions import CropError, CropRegion
 from controlnet_mcp.segmentation import PromptError, RegionPrompt
 
@@ -44,6 +51,7 @@ _EXPECTED_ERRORS = (
     ResolutionError,
     PromptError,
     CropError,
+    OptionError,
     MissingCheckpointError,
 )
 
@@ -127,6 +135,15 @@ def build_server(service: AnalysisService) -> MCPServer:
                 )
             ),
         ] = None,
+        line_length: Annotated[
+            LineLength | None,
+            Field(
+                description=(
+                    "For lines only. long keeps straight edges at least 6% of the image's longer "
+                    "side, dropping short fragments; all, the default, keeps every one."
+                )
+            ),
+        ] = None,
     ) -> list[str | Image]:
         """Run one analysis and return its summary text and image.
 
@@ -139,7 +156,8 @@ def build_server(service: AnalysisService) -> MCPServer:
             if box is not None or point is not None:
                 prompt = RegionPrompt.from_lists(box, point)
             region = CropRegion.from_list(crop) if crop is not None else None
-            result = service.analyze(filename, analysis, resolution, prompt, region)
+            options = AnalysisOptions(line_length=line_length)
+            result = service.analyze(filename, analysis, resolution, prompt, region, options)
         except _EXPECTED_ERRORS as exc:
             raise ToolError(str(exc)) from exc
         text = _result_text(result, filename, measurement_mode)

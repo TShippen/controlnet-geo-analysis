@@ -18,7 +18,14 @@ from controlnet_mcp.images import (
 )
 from controlnet_mcp.measurements import Measurement
 from controlnet_mcp.model_manager import ModelManager, select_device
-from controlnet_mcp.processors import PROCESSORS, ProcessorSpec, get_processor
+from controlnet_mcp.processors import (
+    DEFAULT_OPTIONS,
+    PROCESSORS,
+    AnalysisOptions,
+    OptionError,
+    ProcessorSpec,
+    get_processor,
+)
 from controlnet_mcp.regions import FULL_IMAGE, CropError, CropRegion
 from controlnet_mcp.segmentation import PromptError, RegionPrompt
 
@@ -90,6 +97,7 @@ class AnalysisService:
         resolution: int | None = None,
         prompt: RegionPrompt | None = None,
         crop: CropRegion | None = None,
+        options: AnalysisOptions = DEFAULT_OPTIONS,
     ) -> AnalysisResult:
         """Produce the ``kind`` analysis of a reference image at ``resolution``.
 
@@ -101,6 +109,8 @@ class AnalysisService:
                 and rejected by the others.
             crop: Part of the image to analyze instead of all of it; rejected
                 by analyses that accept a prompt.
+            options: Per-call choices; each is rejected by analyses that do
+                not take it.
 
         Raises:
             ReferenceImageError: When the filename is not an allowed reference image.
@@ -108,22 +118,23 @@ class AnalysisService:
             ResolutionError: When ``resolution`` is outside the accepted range.
             PromptError: When the prompt is missing or not applicable to ``kind``.
             CropError: When the crop is too small or not applicable to ``kind``.
+            OptionError: When an option is not applicable to ``kind``.
             MissingCheckpointError: When the processor's checkpoint is not installed.
         """
         spec = get_processor(kind)
         resolution = self._validated_resolution(resolution)
         _check_prompt(spec, prompt)
         _check_crop(spec, crop)
+        _check_options(spec, options)
         path = resolve_reference_path(self.settings.reference_image_dir, filename)
         data = path.read_bytes()
         digest = image_digest(data)
         image = None
         snapped = None
-        variant = prompt.digest() if prompt is not None else None
         if crop is not None:
             image = decode_reference_image(data, filename)
             snapped = crop.snapped(image.width, image.height)
-            variant = snapped.digest()
+        variant = _cache_variant(prompt, snapped, options)
 
         cached = self.cache.get(digest, spec.kind, spec.version, resolution, variant)
         usable = _usable_cached_render(cached) if cached is not None else None
@@ -159,7 +170,7 @@ class AnalysisService:
         with self._inference_lock:
             detector = self.model_manager.get(spec)
             logger.info("Running %s on %s at %d", spec.kind, filename, resolution)
-            output = spec.run(detector, image, resolution, prompt, region)
+            output = spec.run(detector, image, resolution, prompt, region, options)
         png = image_to_png_bytes(output.image, output.measurement)
         self.cache.put(digest, spec.kind, spec.version, resolution, png, variant)
         return AnalysisResult(
@@ -219,6 +230,30 @@ def _check_crop(spec: ProcessorSpec, crop: CropRegion | None) -> None:
         raise CropError(
             f"The {spec.kind} analysis takes no crop; give a box or point to choose its region."
         )
+
+
+def _check_options(spec: ProcessorSpec, options: AnalysisOptions) -> None:
+    """Reject each option that is set for an analysis that does not take it."""
+    if options.line_length is not None and not spec.accepts_line_length:
+        taking = ", ".join(kind for kind, entry in PROCESSORS.items() if entry.accepts_line_length)
+        raise OptionError(f"line_length applies only to {taking}, not to {spec.kind}.")
+
+
+def _cache_variant(
+    prompt: RegionPrompt | None, crop: CropRegion | None, options: AnalysisOptions
+) -> str | None:
+    """The cache key component naming everything beyond the image, analysis, and resolution.
+
+    None when the request uses the whole image, no prompt, and default
+    options, so such results keep the file names they have always had.
+    """
+    parts = [
+        prompt.digest() if prompt is not None else None,
+        crop.digest() if crop is not None else None,
+        options.cache_variant(),
+    ]
+    present = [part for part in parts if part is not None]
+    return "-".join(present) if present else None
 
 
 def _usable_cached_render(png: bytes) -> _CachedRender | None:

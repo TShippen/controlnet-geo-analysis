@@ -21,7 +21,9 @@ from controlnet_mcp.measurements import Measurement
 from controlnet_mcp.model_manager import MissingCheckpointError, ModelManager
 from controlnet_mcp.processors import (
     PROCESSORS,
+    AnalysisOptions,
     AnalysisOutput,
+    OptionError,
     ProcessorSpec,
     UnknownAnalysisError,
 )
@@ -40,6 +42,7 @@ class RunCounter:
     prompts: list[RegionPrompt | None] = field(default_factory=list)
     regions: list[CropRegion] = field(default_factory=list)
     image_sizes: list[tuple[int, int]] = field(default_factory=list)
+    options: list[AnalysisOptions] = field(default_factory=list)
 
 
 def make_fake_spec(
@@ -48,6 +51,7 @@ def make_fake_spec(
     checkpoints: tuple[CheckpointSpec, ...] = (),
     accepts_prompt: bool = False,
     measurement: Measurement = SAMPLE_MEASUREMENT,
+    accepts_line_length: bool = False,
 ) -> ProcessorSpec:
     """A processor that renders a plain image and reports ``measurement``.
 
@@ -65,12 +69,14 @@ def make_fake_spec(
         resolution: int,
         prompt: RegionPrompt | None,
         region: CropRegion,
+        options: AnalysisOptions,
     ) -> AnalysisOutput:
         counter.calls += 1
         counter.resolutions.append(resolution)
         counter.prompts.append(prompt)
         counter.regions.append(region)
         counter.image_sizes.append(image.size)
+        counter.options.append(options)
         rendered = Image.new("RGB", (resolution, resolution // 2), (0, 0, 255))
         return AnalysisOutput(rendered, measurement)
 
@@ -82,6 +88,7 @@ def make_fake_spec(
         build=build,
         run=run,
         accepts_prompt=accepts_prompt,
+        accepts_line_length=accepts_line_length,
     )
 
 
@@ -296,6 +303,46 @@ def test_different_crops_cache_separately(
     assert repeat.crop == left
 
 
+def test_line_length_rejected_for_other_analyses(
+    service: AnalysisService, reference: str
+) -> None:
+    with pytest.raises(OptionError, match="applies only to lines"):
+        service.analyze(reference, "canny", 64, options=AnalysisOptions(line_length="long"))
+
+
+def test_line_length_reaches_the_run_and_caches_separately(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    counter = RunCounter()
+    monkeypatch.setitem(
+        PROCESSORS, "fake", make_fake_spec("fake", counter, accepts_line_length=True)
+    )
+    long_only = AnalysisOptions(line_length="long")
+
+    service.analyze(reference, "fake", 64)
+    service.analyze(reference, "fake", 64, options=long_only)
+    repeat = service.analyze(reference, "fake", 64, options=long_only)
+
+    assert counter.calls == 2
+    assert counter.options[1] == long_only
+    assert repeat.from_cache is True
+
+
+def test_line_length_all_shares_the_default_cache_entry(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    counter = RunCounter()
+    monkeypatch.setitem(
+        PROCESSORS, "fake", make_fake_spec("fake", counter, accepts_line_length=True)
+    )
+
+    service.analyze(reference, "fake", 64)
+    repeat = service.analyze(reference, "fake", 64, options=AnalysisOptions(line_length="all"))
+
+    assert counter.calls == 1
+    assert repeat.from_cache is True
+
+
 def test_measurement_survives_cache(
     service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -410,6 +457,7 @@ def make_stateful_spec(kind: str) -> ProcessorSpec:
         resolution: int,
         prompt: RegionPrompt | None,
         region: CropRegion,
+        options: AnalysisOptions,
     ) -> AnalysisOutput:
         assert isinstance(detector, StatefulDetector)
         detector.current = image.getpixel((0, 0))

@@ -19,7 +19,11 @@ from controlnet_mcp.checkpoints import CheckpointSpec
 from controlnet_mcp.measurements import BEYOND_RANGE_MAX, EMPTY_MEASUREMENT
 from controlnet_mcp.processors import (
     ANALYSIS_KINDS,
+    DEFAULT_OPTIONS,
     PROCESSORS,
+    AnalysisOptions,
+    AnalysisOutput,
+    ProcessorSpec,
     UnknownAnalysisError,
     get_processor,
 )
@@ -29,6 +33,19 @@ from controlnet_mcp.segmentation import RegionPrompt
 LEARNED_KINDS = ("depth", "normals", "lineart", "lines", "segments")
 
 BRIEF_LIMIT = 160
+
+
+def run_test_processor(
+    spec: ProcessorSpec,
+    detector: object,
+    image: Image.Image,
+    resolution: int,
+    prompt: RegionPrompt | None = None,
+    region: CropRegion = FULL_IMAGE,
+    options: AnalysisOptions = DEFAULT_OPTIONS,
+) -> AnalysisOutput:
+    """Run a processor, on the whole image with default options unless told otherwise."""
+    return spec.run(detector, image, resolution, prompt, region, options)
 
 
 def structured_test_image(size: tuple[int, int]) -> Image.Image:
@@ -111,7 +128,7 @@ def test_canny_run_produces_rgb_at_resolution() -> None:
     spec = get_processor("canny")
     detector = spec.build(Path("/nonexistent"), torch.device("cpu"))
 
-    output = spec.run(detector, structured_test_image((200, 100)), 128, None, FULL_IMAGE)
+    output = run_test_processor(spec, detector, structured_test_image((200, 100)), 128)
 
     assert output.image.mode == "RGB"
     assert output.image.size == (256, 128)
@@ -121,7 +138,7 @@ def test_canny_run_measures_edges() -> None:
     spec = get_processor("canny")
     detector = spec.build(Path("/nonexistent"), torch.device("cpu"))
 
-    output = spec.run(detector, structured_test_image((200, 100)), 128, None, FULL_IMAGE)
+    output = run_test_processor(spec, detector, structured_test_image((200, 100)), 128)
 
     assert output.measurement != EMPTY_MEASUREMENT
     assert "%" in output.measurement.brief
@@ -133,7 +150,7 @@ def test_canny_measures_the_drawn_edges_not_the_ground() -> None:
     spec = get_processor("canny")
     detector = spec.build(Path("/nonexistent"), torch.device("cpu"))
 
-    output = spec.run(detector, structured_test_image((200, 100)), 128, None, FULL_IMAGE)
+    output = run_test_processor(spec, detector, structured_test_image((200, 100)), 128)
 
     assert 0 < edge_share(output.measurement.brief) < 50
 
@@ -156,8 +173,8 @@ def test_lines_run_draws_and_measures_segments(monkeypatch: pytest.MonkeyPatch) 
     segments = np.array([[0.0, 0.0, 60.0, 0.0], [10.0, 10.0, 10.0, 50.0]])
     monkeypatch.setattr("controlnet_mcp.processors.pred_lines", lambda *args: segments)
 
-    output = get_processor("lines").run(
-        MLSDdetector(object()), structured_test_image((128, 128)), 128, None, FULL_IMAGE
+    output = run_test_processor(
+        get_processor("lines"), MLSDdetector(object()), structured_test_image((128, 128)), 128
     )
 
     assert "2 straight edges" in output.measurement.brief
@@ -175,8 +192,8 @@ def test_lines_run_reports_nothing_when_no_segments_are_found(
 
     monkeypatch.setattr("controlnet_mcp.processors.pred_lines", raise_index_error)
 
-    output = get_processor("lines").run(
-        MLSDdetector(object()), structured_test_image((128, 128)), 128, None, FULL_IMAGE
+    output = run_test_processor(
+        get_processor("lines"), MLSDdetector(object()), structured_test_image((128, 128)), 128
     )
 
     assert output.measurement.brief == "No straight edges found."
@@ -188,15 +205,49 @@ def test_lines_run_maps_endpoints_through_region(monkeypatch: pytest.MonkeyPatch
     segments = np.array([[0.0, 0.0, 128.0, 0.0]])
     monkeypatch.setattr("controlnet_mcp.processors.pred_lines", lambda *args: segments)
 
-    output = get_processor("lines").run(
+    output = run_test_processor(
+        get_processor("lines"),
         MLSDdetector(object()),
         structured_test_image((128, 128)),
         128,
-        None,
-        CropRegion(0.5, 0.5, 1.0, 1.0),
+        region=CropRegion(0.5, 0.5, 1.0, 1.0),
     )
 
     assert "(0.50,0.50)-(1.00,0.50)" in output.measurement.brief
+
+
+def test_lines_long_drops_segments_shorter_than_the_cutoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a 128x128 detection the cutoff is 7.68 pixels: 60 stays, 5 goes."""
+    segments = np.array([[0.0, 0.0, 60.0, 0.0], [0.0, 64.0, 5.0, 64.0]])
+    monkeypatch.setattr("controlnet_mcp.processors.pred_lines", lambda *args: segments)
+
+    output = run_test_processor(
+        get_processor("lines"),
+        MLSDdetector(object()),
+        structured_test_image((128, 128)),
+        128,
+        options=AnalysisOptions(line_length="long"),
+    )
+
+    assert output.measurement.brief.startswith("1 long straight edge;")
+    assert np.array(output.image)[64, 2].tolist() == [0, 0, 0]
+
+
+def test_lines_long_with_nothing_long_enough(monkeypatch: pytest.MonkeyPatch) -> None:
+    segments = np.array([[0.0, 64.0, 5.0, 64.0]])
+    monkeypatch.setattr("controlnet_mcp.processors.pred_lines", lambda *args: segments)
+
+    output = run_test_processor(
+        get_processor("lines"),
+        MLSDdetector(object()),
+        structured_test_image((128, 128)),
+        128,
+        options=AnalysisOptions(line_length="long"),
+    )
+
+    assert output.measurement.brief == "No long straight edges found."
 
 
 @pytest.mark.slow
@@ -210,7 +261,7 @@ def test_learned_processor_produces_rgb_at_resolution(
 
     detector = spec.build(model_dir, torch.device("cpu"))
     prompt = RegionPrompt.from_lists([0.2, 0.2, 0.8, 0.8], None) if spec.accepts_prompt else None
-    output = spec.run(detector, structured_test_image((128, 128)), 128, prompt, FULL_IMAGE)
+    output = run_test_processor(spec, detector, structured_test_image((128, 128)), 128, prompt)
 
     assert output.image.mode == "RGB"
     assert output.image.size == (128, 128)
@@ -237,7 +288,7 @@ def test_normals_encode_facing_direction_in_camera_space(
     spec = get_processor("normals")
     detector = spec.build(installed_checkpoints(spec.checkpoints), torch.device("cpu"))
 
-    rendered = spec.run(detector, box_scene_image(), 256, None, FULL_IMAGE).image
+    rendered = run_test_processor(spec, detector, box_scene_image(), 256).image
 
     front_red, front_green, front_blue = median_color(rendered, (300, 300))
     assert front_blue > 230
@@ -263,7 +314,7 @@ def test_depth_clips_the_farthest_share_to_black(
     spec = get_processor("depth")
     detector = spec.build(installed_checkpoints(spec.checkpoints), torch.device("cpu"))
 
-    rendered = spec.run(detector, box_scene_image(), 256, None, FULL_IMAGE).image
+    rendered = run_test_processor(spec, detector, box_scene_image(), 256).image
 
     gray = np.array(rendered.convert("L"))
     assert float((gray <= BEYOND_RANGE_MAX).mean()) >= 0.14
@@ -280,6 +331,6 @@ def test_lines_on_an_image_without_straight_edges(
 
     blank = Image.new("RGB", (128, 128), (120, 120, 120))
 
-    output = spec.run(detector, blank, 128, None, FULL_IMAGE)
+    output = run_test_processor(spec, detector, blank, 128)
 
     assert output.measurement.brief == "No straight edges found."

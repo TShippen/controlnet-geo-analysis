@@ -17,7 +17,7 @@ from controlnet_mcp.cache import AnalysisCache
 from controlnet_mcp.checkpoints import PREPARE_COMMAND
 from controlnet_mcp.config import MeasurementSetting, Settings
 from controlnet_mcp.model_manager import ModelManager
-from controlnet_mcp.processors import PROCESSORS, AnalysisOutput, ProcessorSpec
+from controlnet_mcp.processors import PROCESSORS, AnalysisOptions, AnalysisOutput, ProcessorSpec
 from controlnet_mcp.regions import CropRegion
 from controlnet_mcp.segmentation import RegionPrompt
 from controlnet_mcp.server import SERVER_INSTRUCTIONS, build_server
@@ -87,6 +87,7 @@ def fake_segments_spec() -> ProcessorSpec:
         resolution: int,
         prompt: RegionPrompt | None,
         region: CropRegion,
+        options: AnalysisOptions,
     ) -> AnalysisOutput:
         return AnalysisOutput(Image.new("RGB", (resolution, resolution)), SAMPLE_MEASUREMENT)
 
@@ -171,6 +172,22 @@ async def test_crop_on_segments_is_error(client: Client) -> None:
 
     assert result.is_error is True
     assert "box or point" in result.content[0].text
+
+
+async def test_analyze_schema_has_line_length(client: Client) -> None:
+    tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    line_length = tools["analyze_image"].input_schema["properties"]["line_length"]
+    assert "lines only" in line_length["description"]
+
+
+async def test_line_length_on_canny_is_error(client: Client) -> None:
+    result = await client.call_tool(
+        "analyze_image", {"filename": "chair.png", "analysis": "canny", "line_length": "long"}
+    )
+
+    assert result.is_error is True
+    assert "line_length" in result.content[0].text
 
 
 async def test_segments_without_prompt_is_error(client: Client) -> None:

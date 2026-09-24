@@ -119,6 +119,7 @@ def measure_lines(
     width: int,
     height: int,
     region: CropRegion = FULL_IMAGE,
+    long_only: bool = False,
 ) -> Measurement:
     """Count detected straight segments and name the longest of them.
 
@@ -127,11 +128,14 @@ def measure_lines(
         width: Width in pixels of the image the segments were detected in.
         height: Height in pixels of that image.
         region: The part of the reference image that image was rendered from.
+        long_only: Whether short segments were filtered out, which the
+            wording then says.
     """
+    kind = "long straight edge" if long_only else "straight edge"
     if len(segments) == 0:
-        return _both_forms("No straight edges found.")
+        return _both_forms(f"No {kind}s found.")
     ordered = sorted(segments, key=_segment_length, reverse=True)
-    noun = "straight edge" if len(ordered) == 1 else "straight edges"
+    noun = kind if len(ordered) == 1 else f"{kind}s"
     endpoints = [
         _endpoints(segment, width, height, region) for segment in ordered[:LINE_LIMIT_FULL]
     ]

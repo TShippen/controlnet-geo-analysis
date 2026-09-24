@@ -65,10 +65,40 @@ ANNOTATOR_SUBDIR = "annotators"
 
 LINE_SCORE_THRESHOLD = 0.1
 LINE_DISTANCE_THRESHOLD = 0.1
+# Chosen on a dense architectural photo: 6% of the longer side keeps every massing
+# outline and all three families of parallel edges while dropping the short
+# fragments; 10% already broke building corners and outlines apart.
+LONG_LINE_FRACTION = 0.06
+
+LineLength = Literal["all", "long"]
 
 
 class UnknownAnalysisError(Exception):
     """Raised when a requested analysis name is not one of ``ANALYSIS_KINDS``."""
+
+
+class OptionError(ValueError):
+    """Raised when a per-call option is given to an analysis that does not take it."""
+
+
+@dataclass(frozen=True)
+class AnalysisOptions:
+    """Per-call choices that change what one analysis renders.
+
+    A field left at None takes the analysis's default, and only an analysis
+    that declares the option accepts a value for it.
+    """
+
+    line_length: LineLength | None = None
+
+    def cache_variant(self) -> str | None:
+        """The cache key component for these options, or None when all are defaults."""
+        if self.line_length is None or self.line_length == "all":
+            return None
+        return f"length-{self.line_length}"
+
+
+DEFAULT_OPTIONS = AnalysisOptions()
 
 
 @dataclass(frozen=True)
@@ -95,14 +125,17 @@ class ProcessorSpec:
         build: Constructs the detector from the model directory and moves it
             to the given device.
         run: Runs a detector on an RGB image at a detect resolution with an
-            optional region prompt and returns the RGB result plus its
-            measurement. The image may be a crop of the reference; the last
-            argument says which part, so measured positions can be reported
-            in fractions of the full reference. Every run measures what it rendered, even when there
-            was nothing to find; a cached result whose brief measurement is
-            empty is taken for a stale entry and rendered again.
+            optional region prompt, the crop region the image came from, and
+            the per-call options, and returns the RGB result plus its
+            measurement. The crop region lets measured positions be reported
+            in fractions of the full reference. Every run measures what it
+            rendered, even when there was nothing to find; a cached result
+            whose brief measurement is empty is taken for a stale entry and
+            rendered again.
         accepts_prompt: Whether the analysis needs a region prompt. Prompts are
             rejected for analyses that do not accept them.
+        accepts_line_length: Whether the analysis takes the ``line_length``
+            option. The option is rejected for analyses that do not.
         version: Render version, part of every cache key. Bump it whenever the
             output for the same inputs changes: a different checkpoint, a
             changed detector default, or a change to how the result is drawn.
@@ -116,8 +149,12 @@ class ProcessorSpec:
     use_when: str
     checkpoints: tuple[CheckpointSpec, ...]
     build: Callable[[Path, torch.device], object]
-    run: Callable[[object, Image.Image, int, RegionPrompt | None, CropRegion], AnalysisOutput]
+    run: Callable[
+        [object, Image.Image, int, RegionPrompt | None, CropRegion, AnalysisOptions],
+        AnalysisOutput,
+    ]
     accepts_prompt: bool = False
+    accepts_line_length: bool = False
     version: str = "1"
 
     @property
@@ -199,9 +236,10 @@ def _run_depth(
     resolution: int,
     prompt: RegionPrompt | None,
     region: CropRegion,
+    options: AnalysisOptions,
 ) -> AnalysisOutput:
     """Run the depth detector and measure how much of the map is near, mid, and far."""
-    del prompt
+    del prompt, options
     rendered = _render_whole_image(detector, image, resolution)
     return AnalysisOutput(
         image=rendered, measurement=measure_depth(_grayscale(rendered), region)
@@ -214,12 +252,13 @@ def _run_normals(
     resolution: int,
     prompt: RegionPrompt | None,
     region: CropRegion,
+    options: AnalysisOptions,
 ) -> AnalysisOutput:
     """Run the normal detector and measure the flat and curved areas of the map.
 
     The measurement reports only shares of the map, so the region is unused.
     """
-    del prompt, region
+    del prompt, region, options
     rendered = _render_whole_image(detector, image, resolution)
     pixels = np.array(rendered, dtype=np.uint8)
     return AnalysisOutput(image=rendered, measurement=measure_normals(pixels))
@@ -231,9 +270,10 @@ def _run_lineart(
     resolution: int,
     prompt: RegionPrompt | None,
     region: CropRegion,
+    options: AnalysisOptions,
 ) -> AnalysisOutput:
     """Run the lineart detector and measure its edge density; its lines are light on dark."""
-    del prompt, region
+    del prompt, region, options
     rendered = _render_whole_image(detector, image, resolution)
     measurement = measure_edges(_grayscale(rendered), edges_are_dark=False)
     return AnalysisOutput(image=rendered, measurement=measurement)
@@ -245,9 +285,10 @@ def _run_canny(
     resolution: int,
     prompt: RegionPrompt | None,
     region: CropRegion,
+    options: AnalysisOptions,
 ) -> AnalysisOutput:
     """Run the Canny detector and measure its edge density; its edges are white on black."""
-    del prompt, region
+    del prompt, region, options
     rendered = _render_whole_image(detector, image, resolution)
     measurement = measure_edges(_grayscale(rendered), edges_are_dark=False)
     return AnalysisOutput(image=rendered, measurement=measurement)
@@ -259,28 +300,40 @@ def _run_lines(
     resolution: int,
     prompt: RegionPrompt | None,
     region: CropRegion,
+    options: AnalysisOptions,
 ) -> AnalysisOutput:
     """Draw the detected straight segments and measure their endpoints.
 
     The drawing here mirrors what the detector does in its own call, one-pixel
     white segments on a black canvas at the detect resolution, rather than
     calling it: running the prediction directly keeps the endpoints, which the
-    detector would discard after drawing them.
+    detector would discard after drawing them. With ``line_length`` set to
+    long, only segments at least ``LONG_LINE_FRACTION`` of the longer side are
+    drawn and measured.
     """
     del prompt
     if not isinstance(detector, MLSDdetector):
         raise TypeError(f"Expected an MLSDdetector, got {type(detector).__name__}")
     pixels = np.array(resize_for_detection(image, resolution), dtype=np.uint8)
+    height, width = pixels.shape[:2]
     segments = _predict_line_segments(detector, pixels)
+    long_only = options.line_length == "long"
+    if long_only:
+        segments = _long_segments(segments, LONG_LINE_FRACTION * max(width, height))
     canvas = np.zeros_like(pixels)
     for x0, y0, x1, y1 in segments:
         cv2.line(canvas, (int(x0), int(y0)), (int(x1), int(y1)), (255, 255, 255), 1)
-    height, width = pixels.shape[:2]
-    logger.info("Detected %d straight segments at %dx%d", len(segments), width, height)
+    logger.info("Kept %d straight segments at %dx%d", len(segments), width, height)
     return AnalysisOutput(
         image=Image.fromarray(canvas),
-        measurement=measure_lines(segments.tolist(), width, height, region),
+        measurement=measure_lines(segments.tolist(), width, height, region, long_only),
     )
+
+
+def _long_segments(segments: np.ndarray, min_length: float) -> np.ndarray:
+    """The segments whose length in pixels is at least ``min_length``."""
+    lengths = np.hypot(segments[:, 2] - segments[:, 0], segments[:, 3] - segments[:, 1])
+    return segments[lengths >= min_length]
 
 
 def _predict_line_segments(detector: MLSDdetector, pixels: np.ndarray) -> np.ndarray:
@@ -316,13 +369,14 @@ def _run_segments(
     resolution: int,
     prompt: RegionPrompt | None,
     region: CropRegion,
+    options: AnalysisOptions,
 ) -> AnalysisOutput:
     """Segment the prompted region, render it as an overlay, and measure the mask.
 
     Segmentation always sees the whole reference, since the analysis service
     rejects a crop for it, so the region is unused.
     """
-    del region
+    del region, options
     if prompt is None:
         raise PromptError("Segmentation needs a box [x0, y0, x1, y1] or a point [x, y].")
     if not isinstance(detector, PromptedSegmenter):
@@ -399,12 +453,14 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         ),
         use_when=(
             "Use it first on objects built from straight parts: to find the main axes and the "
-            "direction of perspective, to compare proportions, and to trace straight edges. Skip "
-            "it for organic or mostly curved objects."
+            "direction of perspective, to compare proportions, and to trace straight edges. Set "
+            "line_length to long to keep only the main edges when finding axes. Skip it for "
+            "organic or mostly curved objects."
         ),
         checkpoints=(MLSD_CHECKPOINT,),
         build=_build_lines,
         run=_run_lines,
+        accepts_line_length=True,
         version="2",
     ),
     "segments": ProcessorSpec(

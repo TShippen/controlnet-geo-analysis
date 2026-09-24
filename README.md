@@ -15,7 +15,7 @@ analysis so repeated requests do not rerun inference.
 | --- | --- |
 | `list_reference_images` | Names, dimensions, and formats of the images in the reference directory. |
 | `get_reference_image(filename)` | The original image as MCP image content. |
-| `analyze_image(filename, analysis, resolution=None, box=None, point=None, crop=None)` | One analysis image plus a one-line description. |
+| `analyze_image(filename, analysis, resolution=None, box=None, point=None, crop=None, line_length=None)` | One analysis image plus a one-line description. |
 
 `analysis` is one of `depth`, `normals`, `lineart`, `lines`, `segments`, or `canny`. The names
 are semantic on purpose: the backing model for any of them can change without changing the
@@ -31,6 +31,10 @@ Every other analysis takes an optional `crop` (`[x0, y0, x1, y1]`, same coordina
 runs on that part of the image alone, so the detection resolution goes to the part instead of the
 whole scene. Positions reported for a cropped result are still fractions of the full image, and
 each crop is cached separately. A crop on `segments` is an error.
+
+`lines` takes `line_length`: `all`, the default, keeps every detected segment, and `long` keeps
+only those at least 6% of the image's longer side, which leaves the main edges for finding
+axes and perspective. Any other analysis rejects it.
 
 Every analysis measures its own output. A short and a long form of that measurement are stored
 with the cached image, and `RESULT_MEASUREMENTS` in `.env` decides which one the agent sees.
