@@ -84,8 +84,11 @@ class ProcessorSpec:
 
     Attributes:
         kind: The semantic analysis name, one of ``ANALYSIS_KINDS``.
-        description: One sentence telling an agent what the image shows and
-            when to ask for it; returned alongside the image. Never names a model.
+        description: What the image shows and how to read it. Part of the tool
+            description, and repeated in the result text when measurements are
+            off. Never names a model.
+        use_when: Which modeling step the analysis serves and when to skip
+            it. Part of the tool description only, so results stay short.
         checkpoints: The checkpoint files the detector loads, empty when the
             detector is purely algorithmic.
         build: Constructs the detector from the model directory and moves it
@@ -107,6 +110,7 @@ class ProcessorSpec:
 
     kind: str
     description: str
+    use_when: str
     checkpoints: tuple[CheckpointSpec, ...]
     build: Callable[[Path, torch.device], object]
     run: Callable[[object, Image.Image, int, RegionPrompt | None], AnalysisOutput]
@@ -299,8 +303,15 @@ PROCESSORS: dict[str, ProcessorSpec] = {
     "depth": ProcessorSpec(
         kind="depth",
         description=(
-            "Depth map: brighter pixels are closer to the camera. Ask for it to judge which "
-            "parts sit in front of others, where surfaces step back, and how deep to extrude."
+            "Relative depth map: brighter is closer. Gray levels are stretched for each image, "
+            "so they show which surfaces are in front and roughly how far apart they sit within "
+            "this image, never distances or ratios. The farthest part of every scene is solid "
+            "black."
+        ),
+        use_when=(
+            "Use it to order parts front to back and to see which faces step back. Do not take "
+            "sizes or extrusion lengths from it; get those from straight edges and one known "
+            "dimension."
         ),
         checkpoints=(ZOE_CHECKPOINT,),
         build=_build_depth,
@@ -309,9 +320,16 @@ PROCESSORS: dict[str, ProcessorSpec] = {
     "normals": ProcessorSpec(
         kind="normals",
         description=(
-            "Surface orientation map: each color is a facing direction, so flat faces are one "
-            "even color and curved surfaces shade smoothly. Ask for it to tell planes from "
-            "curves and to read the tilt of each face."
+            "Surface direction map as seen from the camera. More blue faces the viewer, more red "
+            "faces left and less red faces right, more green faces up, so the same face changes "
+            "color when the view changes. A flat face is one even color, a curved surface shades "
+            "smoothly, a crease is a sharp color change, and a fillet is a narrow gradient."
+        ),
+        use_when=(
+            "Use it to choose a surface type for each part: an even color means a plane (planar "
+            "surface, extrusion, box) and smooth shading means a curve (revolve, loft, sweep, "
+            "network surface, SubD). It also tells a crease from a fillet. It is least reliable "
+            "on large plain surfaces such as floors."
         ),
         checkpoints=(NORMALBAE_CHECKPOINT,),
         build=_build_normals,
@@ -320,8 +338,14 @@ PROCESSORS: dict[str, ProcessorSpec] = {
     "lineart": ProcessorSpec(
         kind="lineart",
         description=(
-            "Clean line drawing: light contours on black with texture and shading removed. Ask "
-            "for it to trace silhouettes, part boundaries, and profile curves."
+            "Line drawing of the edges that carry shape: silhouettes, creases, and part "
+            "boundaries, drawn light on black with texture and shading removed. It does not say "
+            "which kind of edge a line is."
+        ),
+        use_when=(
+            "Use it to trace outlines and profiles into curves and to find where one part ends "
+            "and the next begins. It can drop faint details, so check the original before "
+            "relying on a missing edge."
         ),
         checkpoints=(LINEART_CHECKPOINT, LINEART_COARSE_CHECKPOINT),
         build=_build_lineart,
@@ -331,8 +355,13 @@ PROCESSORS: dict[str, ProcessorSpec] = {
     "lines": ProcessorSpec(
         kind="lines",
         description=(
-            "Straight edges only: white segments on black. Ask for it to find principal axes, "
-            "planar edges, and perspective direction in objects with straight geometry."
+            "Straight edges only, drawn as white segments on black. Curves are missed or broken "
+            "into short pieces."
+        ),
+        use_when=(
+            "Use it first on objects built from straight parts: to find the main axes and the "
+            "direction of perspective, to compare proportions, and to trace straight edges. Skip "
+            "it for organic or mostly curved objects."
         ),
         checkpoints=(MLSD_CHECKPOINT,),
         build=_build_lines,
@@ -342,8 +371,13 @@ PROCESSORS: dict[str, ProcessorSpec] = {
     "segments": ProcessorSpec(
         kind="segments",
         description=(
-            "Region outline: the part you pointed at is tinted and outlined on the image. Ask "
-            "for it with a box or point to isolate one component and learn its extent."
+            "One region, chosen with a box or point, tinted and outlined on the photo. The "
+            "outline is flat: it says nothing about depth or about parts hidden from view. A "
+            "single point can select the whole object, one part, or a smaller piece of a part."
+        ),
+        use_when=(
+            "Use it to split the object into components and to mark the region you will study "
+            "in depth or normals. Give a box when you mean a whole component."
         ),
         checkpoints=(MOBILE_SAM_CHECKPOINT,),
         build=_build_segments,
@@ -353,8 +387,12 @@ PROCESSORS: dict[str, ProcessorSpec] = {
     "canny": ProcessorSpec(
         kind="canny",
         description=(
-            "Raw edge pixels: every sharp intensity change, including texture and noise. Ask "
-            "for it when the clean line drawing dropped a detail you need."
+            "Every sharp change in brightness or color, white on black: real edges mixed with "
+            "texture, shadows, highlights, and noise."
+        ),
+        use_when=(
+            "Use it only to confirm a detail the line drawing dropped, in an area you already "
+            "know is solid geometry. Don't start with it, and don't trace outlines from it."
         ),
         checkpoints=(),
         build=_build_canny,

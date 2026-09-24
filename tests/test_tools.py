@@ -88,6 +88,7 @@ def fake_segments_spec() -> ProcessorSpec:
     return ProcessorSpec(
         kind="segments",
         description="Region outline: the part you pointed at. Ask for it to isolate a component.",
+        use_when="Use it to split the object into components.",
         checkpoints=(),
         build=build,
         run=run,
@@ -295,6 +296,26 @@ async def test_measurement_mode_follows_the_only_settings(
     assert isinstance(text, TextContent)
     assert SAMPLE_MEASUREMENT.full in text.text
     assert "measurements" in description
+
+
+async def test_every_use_when_appears_in_the_tool_description(client: Client) -> None:
+    description = await tool_description(client, "analyze_image")
+
+    for kind, spec in PROCESSORS.items():
+        assert spec.use_when in description, f"{kind} guidance missing from the description"
+
+
+async def test_off_result_text_omits_use_when(settings: Settings) -> None:
+    """Choosing guidance belongs to the tool description; results carry only the reading."""
+    async with client_measuring(settings, "off") as client:
+        result = await client.call_tool(
+            "analyze_image", {"filename": "chair.png", "analysis": "canny", "resolution": 64}
+        )
+
+    text = result.content[0]
+    assert isinstance(text, TextContent)
+    assert PROCESSORS["canny"].description in text.text
+    assert PROCESSORS["canny"].use_when not in text.text
 
 
 async def test_description_mentions_measurements_only_when_on(settings: Settings) -> None:

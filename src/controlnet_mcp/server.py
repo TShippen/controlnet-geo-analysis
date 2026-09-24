@@ -29,9 +29,12 @@ SERVER_NAME = "ControlNet Geometry Analysis"
 
 SERVER_INSTRUCTIONS = (
     "Visual evidence about reference images for rebuilding an object in 3D. "
-    "Start with list_reference_images, look at the original with get_reference_image, then "
-    "ask analyze_image for depth, normals, lineart, lines, canny, or segments. "
-    "Each result is an image with a line of text. Combine several before committing to geometry."
+    "Start with list_reference_images and look at the original with get_reference_image, then "
+    "ask analyze_image for the one analysis your current step needs. A usual order: lines for "
+    "axes and perspective on objects with straight parts, segments to split the object into "
+    "parts, lineart to trace profiles, normals to choose flat or curved surfaces for each part, "
+    "depth to order parts front to back, and canny last for a missing detail. No analysis gives "
+    "absolute size; get one known dimension from the user or the image."
 )
 
 _EXPECTED_ERRORS = (
@@ -136,12 +139,16 @@ def _analyze_image_description(mode: MeasurementSetting) -> str:
     """The agent-facing description of ``analyze_image`` for one measurement setting.
 
     The per-analysis reading instructions live here rather than in each result,
-    so a result that carries measurements does not repeat them.
+    so a result that carries measurements does not repeat them. Guidance on
+    when to use each analysis appears only here.
     """
     description = (
-        "Produce one visual analysis of a reference image. What each analysis shows and when to "
-        "ask for it:\n"
-        + "\n".join(f"- {kind}: {spec.description}" for kind, spec in PROCESSORS.items())
+        "Produce one visual analysis of a reference image. Each analysis answers a different "
+        "question, so pick the one that fits your current modeling step; running all of them "
+        "rarely helps. What each shows and when to use it:\n"
+        + "\n".join(
+            f"- {kind}: {spec.description} {spec.use_when}" for kind, spec in PROCESSORS.items()
+        )
         + "\nAnalyses that take a box or point need one; use get_reference_image to choose it."
     )
     if mode == "off":

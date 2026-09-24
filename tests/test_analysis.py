@@ -68,6 +68,7 @@ def make_fake_spec(
     return ProcessorSpec(
         kind=kind,
         description=f"Fake {kind} analysis.",
+        use_when=f"Use fake {kind} for tests.",
         checkpoints=checkpoints,
         build=build,
         run=run,
@@ -343,6 +344,7 @@ def make_stateful_spec(kind: str) -> ProcessorSpec:
     return ProcessorSpec(
         kind=kind,
         description="Stateful fake.",
+        use_when="Use it to test concurrency.",
         checkpoints=(),
         build=build,
         run=run,

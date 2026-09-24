@@ -50,6 +50,32 @@ def structured_test_image(size: tuple[int, int]) -> Image.Image:
     return image
 
 
+def box_scene_image() -> Image.Image:
+    """A flat-shaded cube on a floor, lit from the upper left, at 640x480.
+
+    The front face points at the camera, the top face points up, and the right
+    face points to the right of the image, so each face has one known normal.
+    """
+    image = Image.new("RGB", (640, 480), (234, 234, 240))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 260, 640, 480), fill=(170, 160, 150))
+    draw.rectangle((200, 200, 400, 400), fill=(150, 60, 50))
+    draw.polygon([(200, 200), (280, 140), (480, 140), (400, 200)], fill=(210, 110, 95))
+    draw.polygon([(400, 200), (480, 140), (480, 340), (400, 400)], fill=(100, 38, 33))
+    return image
+
+
+def median_color(image: Image.Image, center: tuple[int, int]) -> tuple[int, int, int]:
+    """Median RGB of a 9x9 patch around a point given in 640x480 scene coordinates."""
+    pixels = np.array(image)
+    height, width = pixels.shape[:2]
+    x = round(center[0] * width / 640)
+    y = round(center[1] * height / 480)
+    patch = pixels[y - 4 : y + 5, x - 4 : x + 5].reshape(-1, 3)
+    red, green, blue = np.median(patch, axis=0)
+    return int(red), int(green), int(blue)
+
+
 def edge_share(brief: str) -> float:
     """The percentage an edge measurement reports, as a number."""
     match = re.search(r"([\d.]+)%", brief)
@@ -60,6 +86,10 @@ def edge_share(brief: str) -> float:
 def test_registry_covers_all_kinds() -> None:
     assert set(PROCESSORS) == set(ANALYSIS_KINDS)
     assert all(spec.kind == kind for kind, spec in PROCESSORS.items())
+
+
+def test_every_processor_has_use_when() -> None:
+    assert all(spec.use_when for spec in PROCESSORS.values())
 
 
 def test_canny_requires_no_model() -> None:
@@ -169,6 +199,52 @@ def test_learned_processor_produces_rgb_at_resolution(
     if kind == "lineart":
         # Strokes are the minority of the drawing; a measured majority means inverted polarity.
         assert 0 < edge_share(output.measurement.brief) < 50
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_normals_encode_facing_direction_in_camera_space(
+    installed_checkpoints: Callable[[Iterable[CheckpointSpec]], Path],
+) -> None:
+    """Pins the color encoding the agent-facing normals text describes.
+
+    Each channel is centered on 128. Red is high for a face turned to the image
+    left and low for one turned right, green is high for a face turned up, and
+    blue is high for a face turned toward the camera.
+    """
+    spec = get_processor("normals")
+    detector = spec.build(installed_checkpoints(spec.checkpoints), torch.device("cpu"))
+
+    rendered = spec.run(detector, box_scene_image(), 256, None).image
+
+    front_red, front_green, front_blue = median_color(rendered, (300, 300))
+    assert front_blue > 230
+    assert 100 <= front_red <= 160
+    assert 100 <= front_green <= 160
+    assert median_color(rendered, (340, 170))[1] > 220
+    right_red, _, right_blue = median_color(rendered, (440, 270))
+    assert right_red < 100
+    assert right_red < front_red - 30
+    assert right_blue > 150
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_depth_clips_the_farthest_share_to_black(
+    installed_checkpoints: Callable[[Iterable[CheckpointSpec]], Path],
+) -> None:
+    """Pins that the depth rendering stretches each image between percentiles.
+
+    Everything at or beyond the 85th-percentile depth renders black, so any
+    scene has a solid black far region, which the agent-facing text states.
+    """
+    spec = get_processor("depth")
+    detector = spec.build(installed_checkpoints(spec.checkpoints), torch.device("cpu"))
+
+    rendered = spec.run(detector, box_scene_image(), 256, None).image
+
+    gray = np.array(rendered.convert("L"))
+    assert float((gray <= 2).mean()) >= 0.14
 
 
 @pytest.mark.slow

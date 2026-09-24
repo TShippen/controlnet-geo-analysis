@@ -59,7 +59,8 @@ def measure_normals(rgb: np.ndarray) -> Measurement:
     A pixel counts as flat when its normal barely changes towards its right and
     lower neighbours. Flat normals are grouped by quantized bin, so a face is
     only ever reported by how much of the image it covers, never by the
-    direction it faces: the encoding's sign conventions are not documented.
+    direction it faces: the encoding is relative to the camera, so the same
+    face takes a different color from another viewpoint.
     The full form counts the bins covering at least ``ORIENTATION_MIN_SHARE``.
     """
     normals = rgb.astype(np.float32) / 255.0 * 2.0 - 1.0
