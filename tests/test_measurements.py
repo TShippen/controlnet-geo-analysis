@@ -12,6 +12,7 @@ from controlnet_mcp.measurements import (
     measure_mask,
     measure_normals,
 )
+from controlnet_mcp.regions import CropRegion
 
 
 def test_depth_shares() -> None:
@@ -30,6 +31,17 @@ def test_depth_full_bounds_the_near_region() -> None:
     full = measure_depth(gray).full
 
     assert "x 0.00 to 1.00" in full
+    assert "y 0.00 to 1.00" in full
+
+
+def test_depth_full_bounds_near_region_in_full_image_coordinates() -> None:
+    """A crop of the right half: the bright left half of the crop is x 0.50 to 0.75 overall."""
+    gray = np.zeros((100, 100), dtype=np.uint8)
+    gray[:, :50] = 255
+
+    full = measure_depth(gray, CropRegion(0.5, 0.0, 1.0, 1.0)).full
+
+    assert "x 0.50 to 0.75" in full
     assert "y 0.00 to 1.00" in full
 
 
@@ -129,6 +141,14 @@ def test_lines_clips_endpoints_to_the_frame() -> None:
     brief = measure_lines(segments, 100, 100).brief
 
     assert "(0.00,0.54)-(1.00,0.54)" in brief
+
+
+def test_lines_maps_endpoints_into_the_crop() -> None:
+    measurement = measure_lines(
+        [[0.0, 0.0, 100.0, 0.0]], 100, 100, CropRegion(0.5, 0.5, 1.0, 1.0)
+    )
+
+    assert "(0.50,0.50)-(1.00,0.50)" in measurement.brief
 
 
 def test_lines_empty() -> None:

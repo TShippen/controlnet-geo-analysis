@@ -25,6 +25,7 @@ from controlnet_mcp.processors import (
     ProcessorSpec,
     UnknownAnalysisError,
 )
+from controlnet_mcp.regions import FULL_IMAGE, CropError, CropRegion
 from controlnet_mcp.segmentation import PromptError, RegionPrompt
 
 DISTINCT_FORMS = Measurement(brief="B", full="F")
@@ -37,6 +38,8 @@ class RunCounter:
     calls: int = 0
     resolutions: list[int] = field(default_factory=list)
     prompts: list[RegionPrompt | None] = field(default_factory=list)
+    regions: list[CropRegion] = field(default_factory=list)
+    image_sizes: list[tuple[int, int]] = field(default_factory=list)
 
 
 def make_fake_spec(
@@ -57,11 +60,17 @@ def make_fake_spec(
         return object()
 
     def run(
-        detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+        detector: object,
+        image: Image.Image,
+        resolution: int,
+        prompt: RegionPrompt | None,
+        region: CropRegion,
     ) -> AnalysisOutput:
         counter.calls += 1
         counter.resolutions.append(resolution)
         counter.prompts.append(prompt)
+        counter.regions.append(region)
+        counter.image_sizes.append(image.size)
         rendered = Image.new("RGB", (resolution, resolution // 2), (0, 0, 255))
         return AnalysisOutput(rendered, measurement)
 
@@ -225,6 +234,68 @@ def test_different_prompts_cache_separately(
     assert repeat.from_cache is True
 
 
+def test_crop_passes_cropped_image_and_snapped_region(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reference is 128x64, so its right half is a 64x64 crop."""
+    counter = RunCounter()
+    monkeypatch.setitem(PROCESSORS, "fake", make_fake_spec("fake", counter))
+
+    result = service.analyze(
+        reference, "fake", 64, crop=CropRegion.from_list([0.5, 0.0, 1.0, 1.0])
+    )
+
+    assert counter.image_sizes == [(64, 64)]
+    assert counter.regions == [CropRegion(0.5, 0.0, 1.0, 1.0)]
+    assert result.crop == CropRegion(0.5, 0.0, 1.0, 1.0)
+
+
+def test_uncropped_run_receives_full_image(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    counter = RunCounter()
+    monkeypatch.setitem(PROCESSORS, "fake", make_fake_spec("fake", counter))
+
+    result = service.analyze(reference, "fake", 64)
+
+    assert counter.regions == [FULL_IMAGE]
+    assert result.crop is None
+
+
+def test_crop_rejected_for_prompted_analysis(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    counter = RunCounter()
+    monkeypatch.setitem(PROCESSORS, "fake", make_fake_spec("fake", counter, accepts_prompt=True))
+
+    with pytest.raises(CropError, match="box or point"):
+        service.analyze(
+            reference,
+            "fake",
+            64,
+            RegionPrompt.from_lists(None, [0.5, 0.5]),
+            CropRegion.from_list([0.0, 0.0, 0.5, 1.0]),
+        )
+    assert counter.calls == 0
+
+
+def test_different_crops_cache_separately(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    counter = RunCounter()
+    monkeypatch.setitem(PROCESSORS, "fake", make_fake_spec("fake", counter))
+    left = CropRegion.from_list([0.0, 0.0, 0.5, 1.0])
+    right = CropRegion.from_list([0.5, 0.0, 1.0, 1.0])
+
+    service.analyze(reference, "fake", 64, crop=left)
+    service.analyze(reference, "fake", 64, crop=right)
+    repeat = service.analyze(reference, "fake", 64, crop=left)
+
+    assert counter.calls == 2
+    assert repeat.from_cache is True
+    assert repeat.crop == left
+
+
 def test_measurement_survives_cache(
     service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -334,7 +405,11 @@ def make_stateful_spec(kind: str) -> ProcessorSpec:
         return StatefulDetector()
 
     def run(
-        detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+        detector: object,
+        image: Image.Image,
+        resolution: int,
+        prompt: RegionPrompt | None,
+        region: CropRegion,
     ) -> AnalysisOutput:
         assert isinstance(detector, StatefulDetector)
         detector.current = image.getpixel((0, 0))

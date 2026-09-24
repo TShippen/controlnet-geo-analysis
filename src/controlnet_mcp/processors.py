@@ -46,6 +46,7 @@ from controlnet_mcp.measurements import (
     measure_mask,
     measure_normals,
 )
+from controlnet_mcp.regions import CropRegion
 from controlnet_mcp.segmentation import (
     PromptedSegmenter,
     PromptError,
@@ -95,7 +96,9 @@ class ProcessorSpec:
             to the given device.
         run: Runs a detector on an RGB image at a detect resolution with an
             optional region prompt and returns the RGB result plus its
-            measurement. Every run measures what it rendered, even when there
+            measurement. The image may be a crop of the reference; the last
+            argument says which part, so measured positions can be reported
+            in fractions of the full reference. Every run measures what it rendered, even when there
             was nothing to find; a cached result whose brief measurement is
             empty is taken for a stale entry and rendered again.
         accepts_prompt: Whether the analysis needs a region prompt. Prompts are
@@ -113,7 +116,7 @@ class ProcessorSpec:
     use_when: str
     checkpoints: tuple[CheckpointSpec, ...]
     build: Callable[[Path, torch.device], object]
-    run: Callable[[object, Image.Image, int, RegionPrompt | None], AnalysisOutput]
+    run: Callable[[object, Image.Image, int, RegionPrompt | None, CropRegion], AnalysisOutput]
     accepts_prompt: bool = False
     version: str = "1"
 
@@ -171,17 +174,14 @@ def _build_canny(model_dir: Path, device: torch.device) -> object:
     return CannyDetector()
 
 
-def _run_detector(
-    detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
-) -> AnalysisOutput:
-    """Run a whole-image ``controlnet_aux`` detector and return an RGB result.
+def _render_whole_image(detector: object, image: Image.Image, resolution: int) -> Image.Image:
+    """Run a whole-image ``controlnet_aux`` detector and return its RGB rendering.
 
     Every such detector accepts the same three keyword arguments and scales the
     short side of the image to ``resolution``, rounding both sides to multiples
-    of 64. Detector-specific thresholds keep their defaults. ``prompt`` is
-    always None here; the analysis service rejects prompts before this point.
+    of 64. Detector-specific thresholds keep their defaults. Whole-image runs
+    never see a prompt; the analysis service rejects prompts before this point.
     """
-    del prompt
     if not callable(detector):
         raise TypeError(f"Detector {type(detector).__name__} is not callable")
     result = detector(
@@ -190,46 +190,75 @@ def _run_detector(
         image_resolution=resolution,
         output_type="pil",
     )
-    return AnalysisOutput(image=result.convert("RGB"))
+    return result.convert("RGB")
 
 
 def _run_depth(
-    detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+    detector: object,
+    image: Image.Image,
+    resolution: int,
+    prompt: RegionPrompt | None,
+    region: CropRegion,
 ) -> AnalysisOutput:
     """Run the depth detector and measure how much of the map is near, mid, and far."""
-    rendered = _run_detector(detector, image, resolution, prompt).image
-    return AnalysisOutput(image=rendered, measurement=measure_depth(_grayscale(rendered)))
+    del prompt
+    rendered = _render_whole_image(detector, image, resolution)
+    return AnalysisOutput(
+        image=rendered, measurement=measure_depth(_grayscale(rendered), region)
+    )
 
 
 def _run_normals(
-    detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+    detector: object,
+    image: Image.Image,
+    resolution: int,
+    prompt: RegionPrompt | None,
+    region: CropRegion,
 ) -> AnalysisOutput:
-    """Run the normal detector and measure the flat and curved areas of the map."""
-    rendered = _run_detector(detector, image, resolution, prompt).image
+    """Run the normal detector and measure the flat and curved areas of the map.
+
+    The measurement reports only shares of the map, so the region is unused.
+    """
+    del prompt, region
+    rendered = _render_whole_image(detector, image, resolution)
     pixels = np.array(rendered, dtype=np.uint8)
     return AnalysisOutput(image=rendered, measurement=measure_normals(pixels))
 
 
 def _run_lineart(
-    detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+    detector: object,
+    image: Image.Image,
+    resolution: int,
+    prompt: RegionPrompt | None,
+    region: CropRegion,
 ) -> AnalysisOutput:
     """Run the lineart detector and measure its edge density; its lines are light on dark."""
-    rendered = _run_detector(detector, image, resolution, prompt).image
+    del prompt, region
+    rendered = _render_whole_image(detector, image, resolution)
     measurement = measure_edges(_grayscale(rendered), edges_are_dark=False)
     return AnalysisOutput(image=rendered, measurement=measurement)
 
 
 def _run_canny(
-    detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+    detector: object,
+    image: Image.Image,
+    resolution: int,
+    prompt: RegionPrompt | None,
+    region: CropRegion,
 ) -> AnalysisOutput:
     """Run the Canny detector and measure its edge density; its edges are white on black."""
-    rendered = _run_detector(detector, image, resolution, prompt).image
+    del prompt, region
+    rendered = _render_whole_image(detector, image, resolution)
     measurement = measure_edges(_grayscale(rendered), edges_are_dark=False)
     return AnalysisOutput(image=rendered, measurement=measurement)
 
 
 def _run_lines(
-    detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+    detector: object,
+    image: Image.Image,
+    resolution: int,
+    prompt: RegionPrompt | None,
+    region: CropRegion,
 ) -> AnalysisOutput:
     """Draw the detected straight segments and measure their endpoints.
 
@@ -250,7 +279,7 @@ def _run_lines(
     logger.info("Detected %d straight segments at %dx%d", len(segments), width, height)
     return AnalysisOutput(
         image=Image.fromarray(canvas),
-        measurement=measure_lines(segments.tolist(), width, height),
+        measurement=measure_lines(segments.tolist(), width, height, region),
     )
 
 
@@ -282,9 +311,18 @@ def _grayscale(image: Image.Image) -> np.ndarray:
 
 
 def _run_segments(
-    detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+    detector: object,
+    image: Image.Image,
+    resolution: int,
+    prompt: RegionPrompt | None,
+    region: CropRegion,
 ) -> AnalysisOutput:
-    """Segment the prompted region, render it as an overlay, and measure the mask."""
+    """Segment the prompted region, render it as an overlay, and measure the mask.
+
+    Segmentation always sees the whole reference, since the analysis service
+    rejects a crop for it, so the region is unused.
+    """
+    del region
     if prompt is None:
         raise PromptError("Segmentation needs a box [x0, y0, x1, y1] or a point [x, y].")
     if not isinstance(detector, PromptedSegmenter):

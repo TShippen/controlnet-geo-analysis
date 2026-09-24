@@ -18,6 +18,7 @@ from controlnet_mcp.checkpoints import PREPARE_COMMAND
 from controlnet_mcp.config import MeasurementSetting, Settings
 from controlnet_mcp.model_manager import ModelManager
 from controlnet_mcp.processors import PROCESSORS, AnalysisOutput, ProcessorSpec
+from controlnet_mcp.regions import CropRegion
 from controlnet_mcp.segmentation import RegionPrompt
 from controlnet_mcp.server import SERVER_INSTRUCTIONS, build_server
 
@@ -81,7 +82,11 @@ def fake_segments_spec() -> ProcessorSpec:
         return object()
 
     def run(
-        detector: object, image: Image.Image, resolution: int, prompt: RegionPrompt | None
+        detector: object,
+        image: Image.Image,
+        resolution: int,
+        prompt: RegionPrompt | None,
+        region: CropRegion,
     ) -> AnalysisOutput:
         return AnalysisOutput(Image.new("RGB", (resolution, resolution)), SAMPLE_MEASUREMENT)
 
@@ -131,6 +136,41 @@ async def test_agent_facing_text_has_no_model_names(client: Client) -> None:
     for text in texts:
         for name in MODEL_NAMES:
             assert name not in text, f"{name!r} appears in agent-facing text: {text[:80]}"
+
+
+async def test_analyze_schema_has_crop(client: Client) -> None:
+    tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    crop = tools["analyze_image"].input_schema["properties"]["crop"]["description"]
+    assert "fractions" in crop
+    assert "segments" in crop
+
+
+async def test_crop_appears_in_result_text(client: Client) -> None:
+    result = await client.call_tool(
+        "analyze_image",
+        {"filename": "chair.png", "analysis": "canny", "resolution": 64, "crop": [0, 0, 0.5, 1]},
+    )
+
+    assert result.is_error is not True
+    text = result.content[0]
+    assert isinstance(text, TextContent)
+    assert "cropped to x 0.00 to 0.50, y 0.00 to 1.00" in text.text
+
+
+async def test_crop_on_segments_is_error(client: Client) -> None:
+    result = await client.call_tool(
+        "analyze_image",
+        {
+            "filename": "chair.png",
+            "analysis": "segments",
+            "point": [0.5, 0.5],
+            "crop": [0, 0, 0.5, 1],
+        },
+    )
+
+    assert result.is_error is True
+    assert "box or point" in result.content[0].text
 
 
 async def test_segments_without_prompt_is_error(client: Client) -> None:

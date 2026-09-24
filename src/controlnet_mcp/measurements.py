@@ -2,7 +2,8 @@
 
 Each function measures one rendered analysis with numpy alone, so nothing here
 depends on torch or on the detector that produced the output. Coordinates are
-normalized to the image size with the origin at the top left and two decimals.
+fractions of the full reference image with the origin at the top left and two
+decimals; an output rendered from a crop maps its positions through the crop.
 """
 
 import math
@@ -10,6 +11,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
+
+from controlnet_mcp.regions import FULL_IMAGE, CropRegion
 
 NEAR_THRESHOLD = 170
 FAR_THRESHOLD = 85
@@ -37,10 +40,14 @@ class Measurement:
 EMPTY_MEASUREMENT = Measurement(brief="", full="")
 
 
-def measure_depth(gray: np.ndarray) -> Measurement:
+def measure_depth(gray: np.ndarray, region: CropRegion = FULL_IMAGE) -> Measurement:
     """Split an 8-bit depth map, in which brighter is closer, into near, mid, and far.
 
     The full form bounds the near region.
+
+    Args:
+        gray: The depth map.
+        region: The part of the reference image the map was rendered from.
     """
     values = gray.astype(np.int16)
     near = values >= NEAR_THRESHOLD
@@ -50,7 +57,7 @@ def measure_depth(gray: np.ndarray) -> Measurement:
     brief = f"Depth: near {near_share:.0f}%, mid {mid_share:.0f}%, far {far_share:.0f}% of pixels."
     if not near.any():
         return Measurement(brief=brief, full=f"{brief} No near region.")
-    return Measurement(brief=brief, full=f"{brief} Near region {_bounding_box(near)}.")
+    return Measurement(brief=brief, full=f"{brief} Near region {_bounding_box(near, region)}.")
 
 
 def measure_normals(rgb: np.ndarray) -> Measurement:
@@ -96,19 +103,27 @@ def measure_edges(gray: np.ndarray, edges_are_dark: bool) -> Measurement:
     return _both_forms(f"Edges cover {share:.1f}% of pixels.")
 
 
-def measure_lines(segments: Sequence[Sequence[float]], width: int, height: int) -> Measurement:
+def measure_lines(
+    segments: Sequence[Sequence[float]],
+    width: int,
+    height: int,
+    region: CropRegion = FULL_IMAGE,
+) -> Measurement:
     """Count detected straight segments and name the longest of them.
 
     Args:
         segments: Endpoint quadruples ``x0, y0, x1, y1`` in pixels.
         width: Width in pixels of the image the segments were detected in.
         height: Height in pixels of that image.
+        region: The part of the reference image that image was rendered from.
     """
     if len(segments) == 0:
         return _both_forms("No straight edges found.")
     ordered = sorted(segments, key=_segment_length, reverse=True)
     noun = "straight edge" if len(ordered) == 1 else "straight edges"
-    endpoints = [_endpoints(segment, width, height) for segment in ordered[:LINE_LIMIT_FULL]]
+    endpoints = [
+        _endpoints(segment, width, height, region) for segment in ordered[:LINE_LIMIT_FULL]
+    ]
     opening = f"{len(ordered)} {noun}; longest "
     return Measurement(
         brief=opening + ", ".join(endpoints[:LINE_LIMIT_BRIEF]) + ".",
@@ -137,13 +152,13 @@ def _both_forms(text: str) -> Measurement:
     return Measurement(brief=text, full=text)
 
 
-def _bounding_box(mask: np.ndarray) -> str:
+def _bounding_box(mask: np.ndarray, region: CropRegion = FULL_IMAGE) -> str:
     """Phrase the normalized extent of the true pixels, with no trailing period."""
     height, width = mask.shape
     rows = np.flatnonzero(mask.any(axis=1))
     cols = np.flatnonzero(mask.any(axis=0))
-    x0, x1 = cols[0] / width, (cols[-1] + 1) / width
-    y0, y1 = rows[0] / height, (rows[-1] + 1) / height
+    x0, y0 = region.to_full(cols[0] / width, rows[0] / height)
+    x1, y1 = region.to_full((cols[-1] + 1) / width, (rows[-1] + 1) / height)
     return (
         f"bounding box x {x0:.2f} to {x1:.2f}, y {y0:.2f} to {y1:.2f} (normalized, origin top-left)"
     )
@@ -175,13 +190,12 @@ def _segment_length(segment: Sequence[float]) -> float:
     return math.hypot(x1 - x0, y1 - y0)
 
 
-def _endpoints(segment: Sequence[float], width: int, height: int) -> str:
-    """Both ends of one segment as normalized coordinate pairs."""
+def _endpoints(segment: Sequence[float], width: int, height: int, region: CropRegion) -> str:
+    """Both ends of one segment as coordinate pairs in fractions of the full image."""
     x0, y0, x1, y1 = segment
-    return (
-        f"({_normalized(x0, width):.2f},{_normalized(y0, height):.2f})"
-        f"-({_normalized(x1, width):.2f},{_normalized(y1, height):.2f})"
-    )
+    start_x, start_y = region.to_full(_normalized(x0, width), _normalized(y0, height))
+    end_x, end_y = region.to_full(_normalized(x1, width), _normalized(y1, height))
+    return f"({start_x:.2f},{start_y:.2f})-({end_x:.2f},{end_y:.2f})"
 
 
 def _normalized(value: float, extent: int) -> float:

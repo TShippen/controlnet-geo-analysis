@@ -19,6 +19,7 @@ from controlnet_mcp.images import (
 from controlnet_mcp.measurements import Measurement
 from controlnet_mcp.model_manager import ModelManager, select_device
 from controlnet_mcp.processors import PROCESSORS, ProcessorSpec, get_processor
+from controlnet_mcp.regions import FULL_IMAGE, CropError, CropRegion
 from controlnet_mcp.segmentation import PromptError, RegionPrompt
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,9 @@ class AnalysisResult:
     """One generated analysis image plus the facts a tool response reports about it.
 
     ``measurement`` holds the form of the output's measurement that the
-    settings select, and is empty when measurements are switched off.
+    settings select, and is empty when measurements are switched off. ``crop``
+    is the part of the reference that was analyzed, aligned to its pixels, or
+    None when the whole image was.
     """
 
     kind: str
@@ -44,6 +47,7 @@ class AnalysisResult:
     height: int
     description: str
     measurement: str
+    crop: CropRegion | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,7 @@ class AnalysisService:
         kind: str,
         resolution: int | None = None,
         prompt: RegionPrompt | None = None,
+        crop: CropRegion | None = None,
     ) -> AnalysisResult:
         """Produce the ``kind`` analysis of a reference image at ``resolution``.
 
@@ -94,21 +99,31 @@ class AnalysisService:
             resolution: Detection resolution; ``None`` uses the configured default.
             prompt: Region to segment; required by analyses that accept a prompt
                 and rejected by the others.
+            crop: Part of the image to analyze instead of all of it; rejected
+                by analyses that accept a prompt.
 
         Raises:
             ReferenceImageError: When the filename is not an allowed reference image.
             UnknownAnalysisError: When ``kind`` is not registered.
             ResolutionError: When ``resolution`` is outside the accepted range.
             PromptError: When the prompt is missing or not applicable to ``kind``.
+            CropError: When the crop is too small or not applicable to ``kind``.
             MissingCheckpointError: When the processor's checkpoint is not installed.
         """
         spec = get_processor(kind)
         resolution = self._validated_resolution(resolution)
         _check_prompt(spec, prompt)
-        variant = prompt.digest() if prompt is not None else None
+        _check_crop(spec, crop)
         path = resolve_reference_path(self.settings.reference_image_dir, filename)
         data = path.read_bytes()
         digest = image_digest(data)
+        image = None
+        snapped = None
+        variant = prompt.digest() if prompt is not None else None
+        if crop is not None:
+            image = decode_reference_image(data, filename)
+            snapped = crop.snapped(image.width, image.height)
+            variant = snapped.digest()
 
         cached = self.cache.get(digest, spec.kind, spec.version, resolution, variant)
         usable = _usable_cached_render(cached) if cached is not None else None
@@ -125,6 +140,7 @@ class AnalysisService:
                     f"{spec.description} Detection resolution {resolution}. Served from cache."
                 ),
                 measurement=self._selected_form(usable.measurement),
+                crop=snapped,
             )
         if cached is not None:
             logger.warning(
@@ -134,11 +150,16 @@ class AnalysisService:
                 resolution,
             )
 
-        image = decode_reference_image(data, filename)
+        region = FULL_IMAGE
+        if image is None:
+            image = decode_reference_image(data, filename)
+        if snapped is not None:
+            image = image.crop(snapped.pixel_box(image.width, image.height))
+            region = snapped
         with self._inference_lock:
             detector = self.model_manager.get(spec)
             logger.info("Running %s on %s at %d", spec.kind, filename, resolution)
-            output = spec.run(detector, image, resolution, prompt)
+            output = spec.run(detector, image, resolution, prompt, region)
         png = image_to_png_bytes(output.image, output.measurement)
         self.cache.put(digest, spec.kind, spec.version, resolution, png, variant)
         return AnalysisResult(
@@ -150,6 +171,7 @@ class AnalysisService:
             height=output.image.height,
             description=f"{spec.description} Detection resolution {resolution}.",
             measurement=self._selected_form(output.measurement),
+            crop=snapped,
         )
 
     def _selected_form(self, measurement: Measurement) -> str:
@@ -188,6 +210,14 @@ def _check_prompt(spec: ProcessorSpec, prompt: RegionPrompt | None) -> None:
         raise PromptError(
             f"The {spec.kind} analysis covers the whole image; box and point apply only to "
             f"{prompted}."
+        )
+
+
+def _check_crop(spec: ProcessorSpec, crop: CropRegion | None) -> None:
+    """Reject a crop for analyses that take a region prompt, which already choose their region."""
+    if crop is not None and spec.accepts_prompt:
+        raise CropError(
+            f"The {spec.kind} analysis takes no crop; give a box or point to choose its region."
         )
 
 

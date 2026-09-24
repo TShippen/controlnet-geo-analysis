@@ -21,6 +21,7 @@ from controlnet_mcp.config import MeasurementSetting, apply_download_policy, loa
 from controlnet_mcp.images import ReferenceImageError, ReferenceImageInfo
 from controlnet_mcp.model_manager import MissingCheckpointError
 from controlnet_mcp.processors import PROCESSORS, AnalysisKind, UnknownAnalysisError
+from controlnet_mcp.regions import CropError, CropRegion
 from controlnet_mcp.segmentation import PromptError, RegionPrompt
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ _EXPECTED_ERRORS = (
     UnknownAnalysisError,
     ResolutionError,
     PromptError,
+    CropError,
     MissingCheckpointError,
 )
 
@@ -115,6 +117,16 @@ def build_server(service: AnalysisService) -> MCPServer:
                 )
             ),
         ] = None,
+        crop: Annotated[
+            list[float] | None,
+            Field(
+                description=(
+                    "Analyze only this part of the image, in more detail: [x0, y0, x1, y1] as "
+                    "fractions of width and height, origin top-left, top-left corner first. "
+                    "Positions in the result stay fractions of the full image. Not for segments."
+                )
+            ),
+        ] = None,
     ) -> list[str | Image]:
         """Run one analysis and return its summary text and image.
 
@@ -126,7 +138,8 @@ def build_server(service: AnalysisService) -> MCPServer:
             prompt = None
             if box is not None or point is not None:
                 prompt = RegionPrompt.from_lists(box, point)
-            result = service.analyze(filename, analysis, resolution, prompt)
+            region = CropRegion.from_list(crop) if crop is not None else None
+            result = service.analyze(filename, analysis, resolution, prompt, region)
         except _EXPECTED_ERRORS as exc:
             raise ToolError(str(exc)) from exc
         text = _result_text(result, filename, measurement_mode)
@@ -150,6 +163,9 @@ def _analyze_image_description(mode: MeasurementSetting) -> str:
             f"- {kind}: {spec.description} {spec.use_when}" for kind, spec in PROCESSORS.items()
         )
         + "\nAnalyses that take a box or point need one; use get_reference_image to choose it."
+        + "\nGive crop to see a small part in more detail. A cropped depth map is stretched "
+        "again, so its gray levels do not match the full view, and depth and normals lose the "
+        "surrounding context."
     )
     if mode == "off":
         return description
@@ -161,15 +177,23 @@ def _result_text(result: AnalysisResult, filename: str, mode: MeasurementSetting
 
     With measurements off, the text repeats what the analysis shows and how to
     read it. Otherwise it names the output and reports what was measured from it.
+    Either way it says which part of the image was analyzed when it was cropped.
     """
+    cropped = ""
+    if result.crop is not None:
+        region = result.crop
+        cropped = (
+            f", cropped to x {region.x0:.2f} to {region.x1:.2f}, "
+            f"y {region.y0:.2f} to {region.y1:.2f}"
+        )
     if mode == "off":
         return (
-            f"{result.kind} analysis of {filename} ({result.width}x{result.height}). "
+            f"{result.kind} analysis of {filename} ({result.width}x{result.height}){cropped}. "
             f"{result.description}"
         )
     cached = ", from cache" if result.from_cache else ""
     summary = (
-        f"{result.kind} analysis of {filename} ({result.width}x{result.height}) "
+        f"{result.kind} analysis of {filename} ({result.width}x{result.height}){cropped} "
         f"at resolution {result.resolution}{cached}."
     )
     if not result.measurement:
