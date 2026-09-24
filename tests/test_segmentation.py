@@ -14,6 +14,8 @@ from controlnet_mcp.segmentation import (
     PromptedSegmenter,
     PromptError,
     RegionPrompt,
+    choose_mask,
+    prediction_inputs,
     render_region_overlay,
 )
 
@@ -64,6 +66,83 @@ def test_prompt_digest_ignores_float_noise() -> None:
 
     assert negative_zero == plain
     assert noisy == plain
+
+
+def test_prompt_rejects_malformed_exclude_point() -> None:
+    with pytest.raises(PromptError, match="exclude point must have two values"):
+        RegionPrompt.from_lists(None, [0.5, 0.5], exclude=[[0.1, 0.2, 0.3]])
+
+
+def test_prompt_rejects_extent_with_a_box() -> None:
+    with pytest.raises(PromptError, match="lone point"):
+        RegionPrompt.from_lists([0.1, 0.1, 0.9, 0.9], None, extent="largest")
+
+
+def test_prompt_rejects_extent_with_exclude_points() -> None:
+    with pytest.raises(PromptError, match="lone point"):
+        RegionPrompt.from_lists(None, [0.5, 0.5], exclude=[[0.9, 0.5]], extent="smallest")
+
+
+def test_prompt_digest_differs_by_exclude_and_extent() -> None:
+    plain = RegionPrompt.from_lists(None, [0.5, 0.5]).digest()
+    excluded = RegionPrompt.from_lists(None, [0.5, 0.5], exclude=[[0.9, 0.5]]).digest()
+    largest = RegionPrompt.from_lists(None, [0.5, 0.5], extent="largest").digest()
+
+    assert len({plain, excluded, largest}) == 3
+
+
+def test_lone_point_asks_for_several_masks() -> None:
+    inputs = prediction_inputs(RegionPrompt.from_lists(None, [0.5, 0.25]), 200, 100)
+
+    assert inputs.multimask is True
+    assert inputs.point_coords is not None
+    assert inputs.point_coords.tolist() == [[100.0, 25.0]]
+    assert inputs.point_labels is not None
+    assert inputs.point_labels.tolist() == [1]
+    assert inputs.box is None
+
+
+def test_box_asks_for_one_mask() -> None:
+    inputs = prediction_inputs(RegionPrompt.from_lists([0.1, 0.2, 0.5, 0.6], None), 200, 100)
+
+    assert inputs.multimask is False
+    assert inputs.box is not None
+    assert inputs.box.tolist() == [20.0, 20.0, 100.0, 60.0]
+    assert inputs.point_coords is None
+
+
+def test_exclude_points_are_labelled_background() -> None:
+    prompt = RegionPrompt.from_lists(None, [0.5, 0.5], exclude=[[0.9, 0.5], [0.1, 0.5]])
+
+    inputs = prediction_inputs(prompt, 200, 100)
+
+    assert inputs.multimask is False
+    assert inputs.point_coords is not None
+    assert inputs.point_coords.tolist() == [[100.0, 50.0], [180.0, 50.0], [20.0, 50.0]]
+    assert inputs.point_labels is not None
+    assert inputs.point_labels.tolist() == [1, 0, 0]
+
+
+def candidate_masks() -> tuple[np.ndarray, np.ndarray]:
+    """Three 4x4 candidates covering 4, 16, and 8 pixels, scored so the middle area scores best."""
+    masks = np.zeros((3, 4, 4), dtype=bool)
+    masks[0, :1, :] = True
+    masks[1, :, :] = True
+    masks[2, :2, :] = True
+    return masks, np.array([0.5, 0.7, 0.9])
+
+
+def test_choose_best_takes_the_highest_score() -> None:
+    masks, scores = candidate_masks()
+
+    assert choose_mask(masks, scores, "best") == 2
+
+
+def test_choose_largest_and_smallest_compare_areas() -> None:
+    masks, scores = candidate_masks()
+
+    assert choose_mask(masks, scores, "largest") == 1
+    assert choose_mask(masks, scores, "smallest") == 0
 
 
 def test_overlay_changes_only_masked_pixels() -> None:

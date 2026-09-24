@@ -29,7 +29,7 @@ from controlnet_mcp.processors import (
     UnknownAnalysisError,
 )
 from controlnet_mcp.regions import CropError, CropRegion
-from controlnet_mcp.segmentation import PromptError, RegionPrompt
+from controlnet_mcp.segmentation import Extent, PromptError, RegionPrompt
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,24 @@ def build_server(service: AnalysisService) -> MCPServer:
                 )
             ),
         ] = None,
+        exclude: Annotated[
+            list[list[float]] | None,
+            Field(
+                description=(
+                    "For segments: points [[x, y], ...] as fractions of width and height on "
+                    "neighboring parts the region must leave out."
+                )
+            ),
+        ] = None,
+        extent: Annotated[
+            Extent | None,
+            Field(
+                description=(
+                    "For segments with a lone point only: largest keeps the whole object, "
+                    "smallest the piece under the point, best (the default) the likeliest region."
+                )
+            ),
+        ] = None,
         crop: Annotated[
             list[float] | None,
             Field(
@@ -153,8 +171,8 @@ def build_server(service: AnalysisService) -> MCPServer:
         """
         try:
             prompt = None
-            if box is not None or point is not None:
-                prompt = RegionPrompt.from_lists(box, point)
+            if any(value is not None for value in (box, point, exclude, extent)):
+                prompt = RegionPrompt.from_lists(box, point, exclude, extent)
             region = CropRegion.from_list(crop) if crop is not None else None
             options = AnalysisOptions(line_length=line_length)
             result = service.analyze(filename, analysis, resolution, prompt, region, options)

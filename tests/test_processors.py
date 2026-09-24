@@ -164,6 +164,11 @@ def test_depth_version_is_two() -> None:
     assert PROCESSORS["depth"].version == "2"
 
 
+def test_segments_version_is_two() -> None:
+    """The bump retires cached box results chosen from three candidates instead of one mask."""
+    assert PROCESSORS["segments"].version == "2"
+
+
 def test_lineart_version_is_two() -> None:
     """The bump retires cached PNGs whose stored measurement has the inverted polarity."""
     assert PROCESSORS["lineart"].version == "2"

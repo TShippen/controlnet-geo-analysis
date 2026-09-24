@@ -190,6 +190,44 @@ async def test_line_length_on_canny_is_error(client: Client) -> None:
     assert "line_length" in result.content[0].text
 
 
+async def test_analyze_schema_has_exclude_and_extent(client: Client) -> None:
+    tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    properties = tools["analyze_image"].input_schema["properties"]
+    assert "leave out" in properties["exclude"]["description"]
+    assert "lone point" in properties["extent"]["description"]
+
+
+async def test_extent_with_a_box_is_error(client: Client) -> None:
+    result = await client.call_tool(
+        "analyze_image",
+        {
+            "filename": "chair.png",
+            "analysis": "segments",
+            "box": [0.1, 0.1, 0.9, 0.9],
+            "extent": "largest",
+        },
+    )
+
+    assert result.is_error is True
+    assert "lone point" in result.content[0].text
+
+
+async def test_exclude_on_canny_is_error(client: Client) -> None:
+    result = await client.call_tool(
+        "analyze_image",
+        {
+            "filename": "chair.png",
+            "analysis": "canny",
+            "point": [0.5, 0.5],
+            "exclude": [[0.1, 0.1]],
+        },
+    )
+
+    assert result.is_error is True
+    assert "whole image" in result.content[0].text
+
+
 async def test_segments_without_prompt_is_error(client: Client) -> None:
     result = await client.call_tool(
         "analyze_image", {"filename": "chair.png", "analysis": "segments"}

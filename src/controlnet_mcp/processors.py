@@ -454,8 +454,9 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         use_when=(
             "Use it first on objects built from straight parts: to find the main axes and the "
             "direction of perspective, to compare proportions, and to trace straight edges. Set "
-            "line_length to long to keep only the main edges when finding axes. Skip it for "
-            "organic or mostly curved objects."
+            "line_length to long to keep only the main edges when finding axes. A busy scene "
+            "can hit the limit on detected edges, so crop to the part you need when edges are "
+            "missing. Skip it for organic or mostly curved objects."
         ),
         checkpoints=(MLSD_CHECKPOINT,),
         build=_build_lines,
@@ -468,16 +469,20 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         description=(
             "One region, chosen with a box or point, tinted and outlined on the photo. The "
             "outline is flat: it says nothing about depth or about parts hidden from view. A "
-            "single point can select the whole object, one part, or a smaller piece of a part."
+            "lone point is ambiguous: it can mean the whole object, one part, or a smaller "
+            "piece of a part."
         ),
         use_when=(
             "Use it to split the object into components and to mark the region you will study "
-            "in depth or normals. Give a box when you mean a whole component."
+            "in depth or normals. Give a box when you mean a whole component. With a lone "
+            "point, set extent to largest for the whole object or smallest for the piece under "
+            "the point. Add exclude points on neighbors the region should not swallow."
         ),
         checkpoints=(MOBILE_SAM_CHECKPOINT,),
         build=_build_segments,
         run=_run_segments,
         accepts_prompt=True,
+        version="2",
     ),
     "canny": ProcessorSpec(
         kind="canny",

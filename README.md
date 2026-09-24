@@ -15,7 +15,7 @@ analysis so repeated requests do not rerun inference.
 | --- | --- |
 | `list_reference_images` | Names, dimensions, and formats of the images in the reference directory. |
 | `get_reference_image(filename)` | The original image as MCP image content. |
-| `analyze_image(filename, analysis, resolution=None, box=None, point=None, crop=None, line_length=None)` | One analysis image plus a one-line description. |
+| `analyze_image(filename, analysis, resolution=None, box=None, point=None, exclude=None, extent=None, crop=None, line_length=None)` | One analysis image plus a one-line description. |
 
 `analysis` is one of `depth`, `normals`, `lineart`, `lines`, `segments`, or `canny`. The names
 are semantic on purpose: the backing model for any of them can change without changing the
@@ -26,6 +26,10 @@ are the controlnet-aux detectors Zoe, NormalBae, Lineart, MLSD, MobileSAM, and O
 (`[x, y]`) in fractions of the image size, and gets back the chosen region tinted and outlined
 on the image plus its area share and bounding box. The image is encoded once and each further
 prompt on it takes a fraction of a second. A prompt on any other analysis is an error.
+`exclude` adds points on neighboring parts the region must leave out. A lone point is ambiguous
+between a whole object and its parts, so only that prompt produces several candidate masks, and
+`extent` picks among them: `best` by predicted quality, or `largest` or `smallest` by area. Any
+other prompt produces a single mask, and `extent` is rejected with it.
 
 Every other analysis takes an optional `crop` (`[x0, y0, x1, y1]`, same coordinates as `box`) and
 runs on that part of the image alone, so the detection resolution goes to the part instead of the
