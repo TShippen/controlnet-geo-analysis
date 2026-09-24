@@ -111,6 +111,64 @@ def test_load_settings_exports_hf_home(tmp_path: Path) -> None:
     assert settings.hf_home == hf_home.resolve()
 
 
+def test_relative_directories_resolve_against_the_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Launched from elsewhere, relative values still land beside the .env file."""
+    env_file = write_env(
+        tmp_path, REFERENCE_IMAGE_DIR="references", MODEL_DIR="models", OUTPUT_DIR="outputs"
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    settings = load_settings(env_file)
+
+    assert settings.reference_image_dir == (tmp_path / "references").resolve()
+    assert settings.model_dir == (tmp_path / "models").resolve()
+    assert settings.output_dir == (tmp_path / "outputs").resolve()
+
+
+def test_relative_hf_home_is_exported_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hugging Face reads HF_HOME itself, so the environment must hold the anchored path."""
+    env_file = write_env(tmp_path, HF_HOME="hf")
+    monkeypatch.chdir(tmp_path / "references")
+
+    settings = load_settings(env_file)
+
+    assert os.environ["HF_HOME"] == str(tmp_path / "hf")
+    assert settings.hf_home == (tmp_path / "hf").resolve()
+
+
+def test_environment_value_overrides_the_env_file(tmp_path: Path) -> None:
+    """A host that sets a variable, such as an MCP config env block, wins over the .env file."""
+    elsewhere = tmp_path / "elsewhere-models"
+    elsewhere.mkdir()
+    env_file = write_env(tmp_path, MODEL_DIR="models")
+    os.environ["MODEL_DIR"] = str(elsewhere)
+
+    settings = load_settings(env_file)
+
+    assert settings.model_dir == elsewhere.resolve()
+
+
+def test_without_an_env_file_relative_directories_use_the_working_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "references").mkdir()
+    (tmp_path / "models").mkdir()
+    monkeypatch.chdir(tmp_path)
+    os.environ["REFERENCE_IMAGE_DIR"] = "references"
+    os.environ["MODEL_DIR"] = "models"
+    os.environ["OUTPUT_DIR"] = "outputs"
+
+    settings = load_settings(tmp_path / "missing" / ".env")
+
+    assert settings.model_dir == (tmp_path / "models").resolve()
+
+
 def test_download_policy_exports_offline_flag(tmp_path: Path) -> None:
     settings = load_settings(write_env(tmp_path))
 

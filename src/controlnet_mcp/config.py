@@ -2,7 +2,11 @@
 
 The .env file is exported into the process environment before settings are
 read so that libraries which consult environment variables directly, such as
-Hugging Face's ``HF_HOME``, observe the same values.
+Hugging Face's ``HF_HOME``, observe the same values. A directory variable may
+be absolute or relative; a relative one is taken relative to the directory of
+the .env file, so the same file works however the server is launched.
+Variables already set in the environment, such as those in an MCP host's
+configuration, take precedence over the .env file.
 """
 
 import logging
@@ -10,7 +14,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -21,6 +25,8 @@ MAX_RESOLUTION = 2048
 
 DeviceSetting = Literal["auto", "cpu", "cuda", "mps"]
 MeasurementSetting = Literal["off", "brief", "full"]
+
+DIRECTORY_VARIABLES = ("REFERENCE_IMAGE_DIR", "MODEL_DIR", "OUTPUT_DIR", "HF_HOME")
 
 
 class ConfigurationError(Exception):
@@ -94,17 +100,28 @@ class Settings(BaseSettings):
 def load_settings(env_file: Path | None = None) -> Settings:
     """Export the .env file into the environment and build validated settings.
 
+    Relative directory variables are rewritten in the environment as absolute
+    paths under the .env file's directory before the settings are read.
+
     Args:
-        env_file: Explicit .env path. When omitted, python-dotenv searches from
-            the current working directory upward.
+        env_file: Explicit .env path. When omitted, python-dotenv searches
+            upward from this package's directory, which finds the project's
+            .env for an editable install wherever the server is launched.
 
     Raises:
         ConfigurationError: When required variables are missing or invalid.
     """
-    if env_file is not None:
-        load_dotenv(env_file)
+    found = env_file if env_file is not None else _discovered_env_file()
+    if found is not None and found.is_file():
+        load_dotenv(found)
+        base_dir = found.resolve().parent
     else:
-        load_dotenv()
+        base_dir = Path.cwd()
+        logger.warning(
+            "No .env file found; relative directories resolve against the working directory %s",
+            base_dir,
+        )
+    _anchor_relative_directories(base_dir)
     try:
         # Required fields are read from the environment by pydantic-settings.
         settings = Settings()  # type: ignore[call-arg]
@@ -119,6 +136,29 @@ def load_settings(env_file: Path | None = None) -> Settings:
         settings.max_loaded_models,
     )
     return settings
+
+
+def _discovered_env_file() -> Path | None:
+    """The .env python-dotenv finds searching upward from this module, or None."""
+    found = find_dotenv()
+    return Path(found) if found else None
+
+
+def _anchor_relative_directories(base_dir: Path) -> None:
+    """Rewrite each relative directory variable in the environment as absolute under ``base_dir``.
+
+    A leading ``~`` is expanded first, so a home-relative path counts as
+    absolute. Writing the result back keeps libraries that read the variable
+    themselves, such as Hugging Face with ``HF_HOME``, on the same directory.
+    """
+    for name in DIRECTORY_VARIABLES:
+        value = os.environ.get(name)
+        if not value:
+            continue
+        path = Path(value).expanduser()
+        if path.is_absolute():
+            continue
+        os.environ[name] = str(base_dir / path)
 
 
 def apply_download_policy(settings: Settings) -> None:

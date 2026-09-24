@@ -9,5 +9,7 @@ build/
 *.egg-info/
 .env
 .local/
+data/*/*
+!data/*/.gitkeep
 plans/
 .idea/

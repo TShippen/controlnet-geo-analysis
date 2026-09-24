@@ -62,8 +62,14 @@ uv sync
 cp .env.example .env
 ```
 
-Edit `.env` to point at three directories. `REFERENCE_IMAGE_DIR` and `MODEL_DIR` must exist;
-`OUTPUT_DIR` is created on first use. See `.env.example` for every variable. `HF_HOME` only
+The example `.env` points every directory at the `data/` folder in the repository, whose
+subfolders exist in a fresh clone and whose contents git ignores, so it works without edits. Put
+reference images in `data/references`. A directory variable may be relative or absolute: a
+relative path is taken relative to the directory of the `.env` file, whatever directory the server
+is launched from, and an absolute path (or `~/...`) keeps that data anywhere else on the machine.
+A variable set in the MCP host's env block takes precedence over `.env`, so one machine can
+override a single directory without editing the file. `REFERENCE_IMAGE_DIR` and `MODEL_DIR` must
+exist; `OUTPUT_DIR` is created on first use. See `.env.example` for every variable. `HF_HOME` only
 affects the preparation command; the running server never touches the Hugging Face cache.
 
 Then install the checkpoints once. This is the only step that touches the network:

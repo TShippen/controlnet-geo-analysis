@@ -45,16 +45,17 @@ def installed_checkpoints() -> Callable[[Iterable[CheckpointSpec]], Path]:
     """Return a function that yields the model directory named by the project .env.
 
     The .env is read without exporting it into the process, so the fast suite's
-    settings never depend on a developer's local configuration. Calling the
-    returned function skips the test when ``MODEL_DIR`` is unset or any of the
-    given checkpoints is absent.
+    settings never depend on a developer's local configuration. A relative
+    ``MODEL_DIR`` is taken relative to the project root, where the .env lives,
+    as the server does. Calling the returned function skips the test when
+    ``MODEL_DIR`` is unset or any of the given checkpoints is absent.
     """
     value = dotenv_values(PROJECT_ROOT / ".env").get("MODEL_DIR")
 
     def require(specs: Iterable[CheckpointSpec]) -> Path:
         if not value:
             pytest.skip("MODEL_DIR is not configured in the project .env")
-        model_dir = Path(value)
+        model_dir = PROJECT_ROOT / Path(value).expanduser()
         missing = missing_checkpoints(model_dir, specs)
         if missing:
             pytest.skip("Missing checkpoints: " + ", ".join(spec.filename for spec in missing))
