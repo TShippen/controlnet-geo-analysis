@@ -16,13 +16,25 @@ from controlnet_mcp.regions import CropRegion
 
 
 def test_depth_shares() -> None:
+    """Near 200, 255, 255; mid 100; far 50; black 0: three, one, one, and one of six."""
     gray = np.array([[0, 100, 200], [255, 255, 50]], dtype=np.uint8)
 
     measurement = measure_depth(gray)
 
     assert "near 50%" in measurement.brief
     assert "mid 17%" in measurement.brief
-    assert "far 33%" in measurement.brief
+    assert "far 17%" in measurement.brief
+    assert "17% solid black" in measurement.brief
+
+
+def test_depth_counts_softened_black_as_black() -> None:
+    """Values up to 2 are the clipped region after resizing; 3 is ordinary far."""
+    gray = np.array([[1, 2, 3, 3]], dtype=np.uint8)
+
+    measurement = measure_depth(gray)
+
+    assert "far 50%" in measurement.brief
+    assert "50% solid black" in measurement.brief
 
 
 def test_depth_full_bounds_the_near_region() -> None:
@@ -49,7 +61,8 @@ def test_depth_all_far() -> None:
     measurement = measure_depth(np.zeros((4, 4), dtype=np.uint8))
 
     assert "near 0%" in measurement.brief
-    assert "far 100%" in measurement.brief
+    assert "far 0%" in measurement.brief
+    assert "100% solid black" in measurement.brief
     assert "No near region." in measurement.full
 
 

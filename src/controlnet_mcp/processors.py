@@ -354,6 +354,7 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         checkpoints=(ZOE_CHECKPOINT,),
         build=_build_depth,
         run=_run_depth,
+        version="2",
     ),
     "normals": ProcessorSpec(
         kind="normals",

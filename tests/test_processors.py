@@ -16,7 +16,7 @@ from controlnet_aux import MLSDdetector
 from PIL import Image, ImageDraw
 
 from controlnet_mcp.checkpoints import CheckpointSpec
-from controlnet_mcp.measurements import EMPTY_MEASUREMENT
+from controlnet_mcp.measurements import BEYOND_RANGE_MAX, EMPTY_MEASUREMENT
 from controlnet_mcp.processors import (
     ANALYSIS_KINDS,
     PROCESSORS,
@@ -142,6 +142,11 @@ def test_lines_version_is_two() -> None:
     assert PROCESSORS["lines"].version == "2"
 
 
+def test_depth_version_is_two() -> None:
+    """The bump retires cached PNGs whose stored measurement counts black as far."""
+    assert PROCESSORS["depth"].version == "2"
+
+
 def test_lineart_version_is_two() -> None:
     """The bump retires cached PNGs whose stored measurement has the inverted polarity."""
     assert PROCESSORS["lineart"].version == "2"
@@ -261,7 +266,7 @@ def test_depth_clips_the_farthest_share_to_black(
     rendered = spec.run(detector, box_scene_image(), 256, None, FULL_IMAGE).image
 
     gray = np.array(rendered.convert("L"))
-    assert float((gray <= 2).mean()) >= 0.14
+    assert float((gray <= BEYOND_RANGE_MAX).mean()) >= 0.14
 
 
 @pytest.mark.slow

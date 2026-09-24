@@ -16,6 +16,7 @@ from controlnet_mcp.regions import FULL_IMAGE, CropRegion
 
 NEAR_THRESHOLD = 170
 FAR_THRESHOLD = 85
+BEYOND_RANGE_MAX = 2
 EDGE_THRESHOLD = 128
 FLAT_GRADIENT = 0.05
 ORIENTATION_BIN = 0.25
@@ -41,9 +42,14 @@ EMPTY_MEASUREMENT = Measurement(brief="", full="")
 
 
 def measure_depth(gray: np.ndarray, region: CropRegion = FULL_IMAGE) -> Measurement:
-    """Split an 8-bit depth map, in which brighter is closer, into near, mid, and far.
+    """Split an 8-bit depth map, in which brighter is closer, into near, mid, far, and black.
 
-    The full form bounds the near region.
+    The rendering stretches each map between two depth percentiles and clips
+    everything beyond the far one to black, so every map has a black share
+    whatever the scene. That share is reported apart from far, which counts
+    only pixels the map still orders. A pixel at or below ``BEYOND_RANGE_MAX``
+    counts as black, allowing for the resize softening the clipped edge. The
+    full form bounds the near region.
 
     Args:
         gray: The depth map.
@@ -51,10 +57,15 @@ def measure_depth(gray: np.ndarray, region: CropRegion = FULL_IMAGE) -> Measurem
     """
     values = gray.astype(np.int16)
     near = values >= NEAR_THRESHOLD
-    near_share = 100.0 * float(near.sum()) / values.size
-    far_share = 100.0 * float((values < FAR_THRESHOLD).sum()) / values.size
-    mid_share = 100.0 - near_share - far_share
-    brief = f"Depth: near {near_share:.0f}%, mid {mid_share:.0f}%, far {far_share:.0f}% of pixels."
+    black = values <= BEYOND_RANGE_MAX
+    near_share = _share(near)
+    black_share = _share(black)
+    far_share = _share((values < FAR_THRESHOLD) & ~black)
+    mid_share = 100.0 - near_share - far_share - black_share
+    brief = (
+        f"Depth: near {near_share:.0f}%, mid {mid_share:.0f}%, far {far_share:.0f}% of pixels; "
+        f"{black_share:.0f}% solid black, beyond the depth range."
+    )
     if not near.any():
         return Measurement(brief=brief, full=f"{brief} No near region.")
     return Measurement(brief=brief, full=f"{brief} Near region {_bounding_box(near, region)}.")
@@ -145,6 +156,11 @@ def measure_mask(mask: np.ndarray) -> Measurement:
         brief=f"{core}.",
         full=f"{core}; centroid ({centroid_x:.2f}, {centroid_y:.2f}).",
     )
+
+
+def _share(mask: np.ndarray) -> float:
+    """Percentage of the pixels that are true."""
+    return 100.0 * float(mask.sum()) / mask.size
 
 
 def _both_forms(text: str) -> Measurement:
