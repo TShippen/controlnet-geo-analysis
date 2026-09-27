@@ -50,7 +50,9 @@ large spread flags the sample as sitting on a boundary between surfaces. Along a
 also lists each place the value changes between two consecutive samples, which brackets a
 boundary to within the sample spacing. Depth values are levels that order surfaces within one
 render; they are not distances. Normal values are directions relative to the camera, so the same
-face reads differently from another viewpoint. Any other analysis is rejected.
+face reads differently from another viewpoint. Sky and open background get values in both maps,
+usually steady ones, so a steady reading does not mean a surface is there. Any other analysis is
+rejected.
 
 Every analysis measures its own output. A short and a long form of that measurement are stored
 with the cached image, and `RESULT_MEASUREMENTS` in `.env` decides which one the agent sees.

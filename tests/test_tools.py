@@ -17,7 +17,13 @@ from controlnet_mcp.cache import AnalysisCache
 from controlnet_mcp.checkpoints import PREPARE_COMMAND
 from controlnet_mcp.config import MeasurementSetting, Settings
 from controlnet_mcp.model_manager import ModelManager
-from controlnet_mcp.processors import PROCESSORS, AnalysisOptions, AnalysisOutput, ProcessorSpec
+from controlnet_mcp.processors import (
+    PROCESSORS,
+    SAMPLED_KINDS,
+    AnalysisOptions,
+    AnalysisOutput,
+    ProcessorSpec,
+)
 from controlnet_mcp.regions import CropRegion
 from controlnet_mcp.segmentation import RegionPrompt
 from controlnet_mcp.server import SERVER_INSTRUCTIONS, build_server
@@ -448,6 +454,12 @@ async def test_sample_description_states_what_values_are_not(client: Client) -> 
 
     assert "not distances" in description
     assert "relative to this camera" in description
+
+
+async def test_sample_description_warns_that_sky_reads_like_a_surface() -> None:
+    """Each sampled analysis says so itself, since each gives sky a steady value."""
+    for kind in SAMPLED_KINDS:
+        assert "Sky and open background" in PROCESSORS[kind].values_description
 
 
 async def test_sample_analysis_schema_lists_sampled_analyses(client: Client) -> None:

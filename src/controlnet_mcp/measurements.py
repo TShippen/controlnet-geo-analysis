@@ -1,7 +1,7 @@
 """Numbers read back off an analysis output, in a brief and a full form.
 
-Each function measures one rendered analysis with numpy alone, so nothing here
-depends on torch or on the detector that produced the output. Coordinates are
+Each function measures one rendered analysis with numpy and cv2 alone, so nothing
+here depends on torch or on the detector that produced the output. Coordinates are
 fractions of the full reference image with the origin at the top left and two
 decimals; an output rendered from a crop maps its positions through the crop.
 """
@@ -10,6 +10,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+import cv2
 import numpy as np
 
 from controlnet_mcp.regions import FULL_IMAGE, CropRegion
@@ -25,6 +26,9 @@ ORIENTATION_MIN_SHARE = 0.05
 # neighbouring pixels (``FLAT_GRADIENT``), so a smaller turn or tilt is within the
 # variation of a face that faces the camera squarely.
 FACING_TOLERANCE_DEGREES = 5
+# Neighbours that join two pixels into one face: the four sharing a side. Pixels
+# touching only at a corner do not join, so two faces meeting at a point stay apart.
+FACE_CONNECTIVITY = 4
 LINE_LIMIT_BRIEF = 3
 LINE_LIMIT_FULL = 12
 
@@ -79,14 +83,17 @@ def measure_normals(rgb: np.ndarray, region: CropRegion = FULL_IMAGE) -> Measure
     """Split a surface normal map into flat and curved area and describe its flat faces.
 
     A pixel counts as flat when its normal barely changes towards its right and
-    lower neighbours. Flat normals are grouped by quantized bin, and each group
-    is one face, reported by how much of the image it covers and by the
-    direction it faces. That direction comes from the mean normal of the
-    group's pixels and is relative to the camera: how far the face is turned
-    left or right of facing the camera and how far it is tilted up or down. The
-    same face gets a different direction from another viewpoint. The brief
-    form gives the largest face; the full form lists the faces covering at
-    least ``ORIENTATION_MIN_SHARE``, largest first, each with its bounding box.
+    lower neighbours. Flat normals are grouped by quantized bin, and each
+    connected region of a group is one face, reported by how much of the image
+    it covers and by the direction it faces. That direction comes from the mean
+    normal of the face's pixels and is relative to the camera: how far the face
+    is turned left or right of facing the camera and how far it is tilted up or
+    down. The same face gets a different direction from another viewpoint. A
+    face is a region of the map, not a recognized surface: sky and open
+    background have even normals too and are reported like any other face.
+    The brief form gives the largest face; the full form lists the faces
+    covering at least ``ORIENTATION_MIN_SHARE``, largest first, each with its
+    bounding box.
 
     Args:
         rgb: The normal map.
@@ -219,7 +226,7 @@ def _neighbour_change(normals: np.ndarray) -> np.ndarray:
 
 @dataclass(frozen=True)
 class _FlatFace:
-    """The flat pixels sharing one quantized normal.
+    """One connected region of flat pixels sharing a quantized normal.
 
     Attributes:
         count: How many pixels the face has.
@@ -240,29 +247,44 @@ class _FlatFace:
 def _flat_faces(normals: np.ndarray, flat: np.ndarray) -> list[_FlatFace]:
     """The largest flat faces of a decoded normal map, largest first.
 
-    Returns at most ``LINE_LIMIT_FULL`` faces, which is as many as any form of
-    the measurement reports.
+    Flat pixels are grouped by quantized normal, and each group is split into
+    its connected regions, so two separate surfaces that happen to face the
+    same way are two faces. Returns at most ``LINE_LIMIT_FULL`` faces, which is
+    as many as any form of the measurement reports.
     """
     if not flat.any():
         return []
-    flat_normals = normals[flat]
     _, inverse, counts = np.unique(
-        np.round(flat_normals / ORIENTATION_BIN), axis=0, return_inverse=True, return_counts=True
+        np.round(normals[flat] / ORIENTATION_BIN), axis=0, return_inverse=True, return_counts=True
     )
-    inverse = inverse.reshape(-1)
-    faces = []
-    for index in np.argsort(-counts, kind="stable")[:LINE_LIMIT_FULL]:
-        members = inverse == index
-        mask = np.zeros(flat.shape, dtype=bool)
-        mask[flat] = members
-        faces.append(
-            _FlatFace(
-                count=int(counts[index]),
-                facing=_facing(flat_normals[members].mean(axis=0)),
-                mask=mask,
-            )
-        )
-    return faces
+    groups = np.full(flat.shape, -1, dtype=np.int64)
+    groups[flat] = inverse.reshape(-1)
+    regions: list[np.ndarray] = []
+    for index in np.argsort(-counts, kind="stable"):
+        # Groups come largest first, so once the kept regions are all at least as
+        # large as a whole group, no later group can hold a larger region.
+        if len(regions) == LINE_LIMIT_FULL and counts[index] <= regions[-1].sum():
+            break
+        regions.extend(_connected_regions(groups == index))
+        regions.sort(key=lambda region: -int(region.sum()))
+        del regions[LINE_LIMIT_FULL:]
+    return [
+        _FlatFace(count=int(mask.sum()), facing=_facing(normals[mask].mean(axis=0)), mask=mask)
+        for mask in regions
+    ]
+
+
+def _connected_regions(mask: np.ndarray) -> list[np.ndarray]:
+    """The largest connected regions of the true pixels, each as its own mask, largest first.
+
+    Returns at most ``LINE_LIMIT_FULL`` regions.
+    """
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(
+        mask.astype(np.uint8), connectivity=FACE_CONNECTIVITY
+    )
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    largest = np.argsort(-areas, kind="stable")[:LINE_LIMIT_FULL]
+    return [labels == label + 1 for label in largest]
 
 
 def _facing(normal: np.ndarray) -> str:

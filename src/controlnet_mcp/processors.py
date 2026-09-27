@@ -451,7 +451,9 @@ PROCESSORS: dict[str, ProcessorSpec] = {
             "A level from 0 to 255, higher is closer. Levels order surfaces within one image "
             "and one crop. Differences between levels are not distances, ratios of levels mean "
             "nothing, and levels from another crop, resolution, or image are not comparable. A "
-            "sample beyond the depth range has no level."
+            "sample beyond the depth range has no level. Sky and open background usually still "
+            "get a level, with a small spread, so a steady reading does not show that a surface "
+            "is there; check the position against the original image."
         ),
     ),
     "normals": ProcessorSpec(
@@ -460,7 +462,8 @@ PROCESSORS: dict[str, ProcessorSpec] = {
             "Surface direction map as seen from the camera. More blue faces the viewer, more red "
             "faces left and less red faces right, more green faces up, so the same face changes "
             "color when the view changes. A flat face is one even color, a curved surface shades "
-            "smoothly, a crease is a sharp color change, and a fillet is a narrow gradient."
+            "smoothly, a crease is a sharp color change, and a fillet is a narrow gradient. Sky "
+            "and open background are colored too and can look like a flat face."
         ),
         use_when=(
             "Use it to choose a surface type for each part: an even color means a plane (planar "
@@ -471,13 +474,15 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         checkpoints=(NORMALBAE_CHECKPOINT,),
         build=_build_normals,
         run=_run_normals,
-        version="2",
+        version="3",
         read_values=read_normal_values,
         values_description=(
             "The direction a surface faces, as the components [right, up, toward the camera] "
             "of a unit vector. The direction is relative to this camera view, not to the world: "
             "a tilted camera tilts every value, and the same face reads differently in another "
-            "view."
+            "view. Sky and open background still get a direction, with a small spread, so a "
+            "steady reading does not show that a surface is there; check the position against "
+            "the original image."
         ),
     ),
     "lineart": ProcessorSpec(

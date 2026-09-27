@@ -175,9 +175,9 @@ def test_lineart_version_is_two() -> None:
     assert PROCESSORS["lineart"].version == "2"
 
 
-def test_normals_version_is_two() -> None:
-    """The bump retires cached PNGs whose stored measurement names no face direction."""
-    assert PROCESSORS["normals"].version == "2"
+def test_normals_version_is_three() -> None:
+    """The bump retires cached PNGs whose stored faces join separate regions into one."""
+    assert PROCESSORS["normals"].version == "3"
 
 
 def test_sampled_kinds_are_depth_and_normals() -> None:

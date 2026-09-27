@@ -133,6 +133,41 @@ def test_normals_full_lists_faces_with_direction_and_box() -> None:
     assert "50% turned 45° left, bounding box x 0.50 to 1.00, y 0.00 to 1.00" in full
 
 
+def test_normals_separate_regions_facing_one_way_are_separate_faces() -> None:
+    """Two patches facing the camera with a turned band between them, on a map 400 wide.
+
+    Columns 99 and 299 are seams and count as curved. The left patch covers
+    columns 0 to 98 and the right patch columns 300 to 399, about 25% each, and
+    the band covers columns 100 to 298, about 50%.
+    """
+    rgb = np.full((8, 400, 3), FACING_CAMERA, dtype=np.uint8)
+    rgb[:, 100:300] = TURNED_LEFT
+
+    full = measure_normals(rgb).full
+
+    assert "50% turned 45° left, bounding box x 0.25 to 0.75" in full
+    assert "25% facing the camera, bounding box x 0.00 to 0.25" in full
+    assert "25% facing the camera, bounding box x 0.75 to 1.00" in full
+
+
+def test_normals_largest_face_is_one_region_not_one_direction() -> None:
+    """Three patches facing the camera are one direction but three faces.
+
+    On a map 100 wide the patches are columns 0 to 19, 40 to 59, and 80 to 99,
+    and the turned bands are columns 20 to 39 and 60 to 79. The last column of
+    every region but the rightmost is a seam and counts as curved, so the
+    rightmost patch keeps 20 columns and every other region keeps 19. Counted
+    by direction, the patches would total 58%.
+    """
+    rgb = np.full((8, 100, 3), FACING_CAMERA, dtype=np.uint8)
+    rgb[:, 20:40] = TURNED_LEFT
+    rgb[:, 60:80] = TURNED_LEFT
+
+    brief = measure_normals(rgb).brief
+
+    assert "largest flat face 20%, facing the camera" in brief
+
+
 def test_normals_face_box_maps_through_crop() -> None:
     """A face filling a crop of the right half spans x 0.50 to 1.00 of the full image."""
     rgb = np.full((8, 8, 3), FACING_CAMERA, dtype=np.uint8)
