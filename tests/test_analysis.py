@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 from PIL import Image
@@ -15,8 +16,9 @@ from conftest import SAMPLE_MEASUREMENT, sampled_test_spec, write_test_image
 from controlnet_mcp.analysis import AnalysisService, ResolutionError
 from controlnet_mcp.cache import AnalysisCache
 from controlnet_mcp.checkpoints import ZOE_CHECKPOINT, CheckpointSpec
+from controlnet_mcp.comparison import ComparisonError
 from controlnet_mcp.config import MeasurementSetting, Settings
-from controlnet_mcp.images import image_to_png_bytes, png_measurement
+from controlnet_mcp.images import ReferenceImageError, image_to_png_bytes, png_measurement
 from controlnet_mcp.measurements import Measurement
 from controlnet_mcp.model_manager import MissingCheckpointError, ModelManager
 from controlnet_mcp.processors import (
@@ -517,6 +519,100 @@ def test_sample_rejects_count_with_points(
 
     with pytest.raises(SamplingError, match="count"):
         service.sample(reference, "fake", [(0.5, 0.5)], None, 8, 64)
+
+
+@pytest.fixture
+def pair_of_references(settings: Settings) -> tuple[str, str]:
+    """Two references of the same proportions, 128x64 and 64x32."""
+    write_test_image(settings.reference_image_dir / "large.png", size=(128, 64))
+    write_test_image(settings.reference_image_dir / "small.png", size=(64, 32))
+    return "large.png", "small.png"
+
+
+def record_detected_sizes(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
+    """Replace line detection with one that finds a single edge and records each image's size."""
+    sizes: list[tuple[int, int]] = []
+
+    def detect(
+        detector: object, image: Image.Image, resolution: int
+    ) -> tuple[np.ndarray, int, int]:
+        sizes.append(image.size)
+        return np.array([[0.0, 10.0, 60.0, 10.0]]), image.width, image.height
+
+    monkeypatch.setattr("controlnet_mcp.analysis.detect_line_segments", detect)
+    monkeypatch.setitem(PROCESSORS, "lines", make_fake_spec("lines", RunCounter()))
+    return sizes
+
+
+def test_compare_pairs_the_edges_of_two_images(
+    service: AnalysisService, pair_of_references: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both images have one edge at the same place of a 128x64 frame, so they pair at no offset."""
+    record_detected_sizes(monkeypatch)
+
+    result = service.compare("large.png", "large.png", align="none", resolution=64)
+
+    assert result.png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert "1 pair of edges" in result.measurement
+    assert "offset (+0.00, +0.00)" in result.measurement
+    assert result.align == "none"
+
+
+def test_compare_crops_both_images_by_the_same_fractions(
+    service: AnalysisService, pair_of_references: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The right half of a 128x64 image and of a 64x32 image are both square."""
+    sizes = record_detected_sizes(monkeypatch)
+    first, second = pair_of_references
+
+    result = service.compare(
+        first, second, align="none", resolution=64, crop=CropRegion.from_list([0.5, 0, 1, 1])
+    )
+
+    assert sizes == [(64, 64), (64, 64)]
+    assert result.crop == CropRegion(0.5, 0.0, 1.0, 1.0)
+
+
+def test_compare_with_plain_images_withholds_the_alignment(
+    service: AnalysisService, pair_of_references: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Solid-color references have no features to fit a transform to."""
+    record_detected_sizes(monkeypatch)
+    first, second = pair_of_references
+
+    result = service.compare(first, second, resolution=64)
+
+    assert "Alignment withheld" in result.measurement
+    assert Image.open(io.BytesIO(result.png)).size == (256, 64)
+
+
+def test_compare_none_with_different_aspect_ratios_is_error(
+    service: AnalysisService, settings: Settings
+) -> None:
+    write_test_image(settings.reference_image_dir / "chair.png", size=(64, 32))
+    write_test_image(settings.reference_image_dir / "table.jpg", size=(16, 16))
+
+    with pytest.raises(ComparisonError, match="proportions"):
+        service.compare("chair.png", "table.jpg", align="none", resolution=64)
+
+
+def test_compare_rejects_files_outside_the_directory(
+    service: AnalysisService, reference: str
+) -> None:
+    with pytest.raises(ReferenceImageError):
+        service.compare(reference, "../x.png")
+
+
+def test_compare_off_reports_no_measurement(
+    settings: Settings, pair_of_references: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record_detected_sizes(monkeypatch)
+
+    result = service_measuring(settings, "off").compare(
+        "large.png", "large.png", align="none", resolution=64
+    )
+
+    assert result.measurement == ""
 
 
 class StatefulDetector:

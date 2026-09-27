@@ -8,8 +8,10 @@ import dataclasses
 import numpy as np
 
 from conftest import camera_scene_test_segments
+from controlnet_mcp.comparison import Alignment, EdgePair, Pairing, identity_alignment
 from controlnet_mcp.evidence import Withheld
 from controlnet_mcp.measurements import (
+    measure_comparison,
     measure_depth,
     measure_edges,
     measure_lines,
@@ -335,6 +337,125 @@ def test_perspective_without_families_says_so() -> None:
     assert measurement.brief == (
         "No group of straight edges converges or runs parallel; 0 straight edges unassigned."
     )
+
+
+def comparison_test_alignment(ambiguous: bool = False) -> Alignment:
+    """A fitted alignment that leaves positions where they are."""
+    return Alignment(
+        transform=np.eye(3),
+        fitted=True,
+        matched=40,
+        inliers=30,
+        coverage=0.5,
+        second_fit_inliers=20 if ambiguous else 0,
+        ambiguous=ambiguous,
+    )
+
+
+def comparison_test_rows(offsets: list[float]) -> tuple[np.ndarray, np.ndarray, Pairing]:
+    """Horizontal edges on rows 40, 80, and so on, each paired with one ``offsets`` below it."""
+    rows = [40.0 * (index + 1) for index in range(len(offsets))]
+    first = np.array([[0.0, row, 128.0, row] for row in rows])
+    second = first + np.array([[0.0, offset, 0.0, offset] for offset in offsets])
+    pairs = tuple(
+        EdgePair(index, index, (0.0, offset), (0.0, 0.0)) for index, offset in enumerate(offsets)
+    )
+    return first, second, Pairing(pairs, (), (), (), ())
+
+
+def test_comparison_brief_lists_largest_offsets() -> None:
+    """Offsets of 2, 8, and 5 pixels down a 256-pixel frame are 0.01, 0.03, and 0.02."""
+    first, second, pairing = comparison_test_rows([2.0, 8.0, 5.0])
+
+    brief = measure_comparison(
+        comparison_test_alignment(), pairing, first, second, (256, 256), (256, 256)
+    ).brief
+
+    assert "3 pairs of edges; unmatched 0 in the first image and 0 in the second." in brief
+    assert "(0.00,0.31)-(0.50,0.31) offset (+0.00, +0.03)" in brief
+    assert brief.index("+0.03") < brief.index("+0.02") < brief.index("+0.01")
+
+
+def test_comparison_brief_reports_the_alignment_support() -> None:
+    first, second, pairing = comparison_test_rows([2.0])
+
+    brief = measure_comparison(
+        comparison_test_alignment(), pairing, first, second, (256, 256), (256, 256)
+    ).brief
+
+    assert (
+        "Aligned by a transform fitted to 30 of 40 matching features, which cover 50% of "
+        "the first image."
+    ) in brief
+
+
+def test_comparison_offsets_scale_through_the_crop() -> None:
+    """An offset of 8 pixels in a 256-pixel frame showing the lower half of the image: 0.02."""
+    first, second, pairing = comparison_test_rows([8.0])
+
+    brief = measure_comparison(
+        comparison_test_alignment(),
+        pairing,
+        first,
+        second,
+        (256, 256),
+        (256, 256),
+        CropRegion(0.0, 0.5, 1.0, 1.0),
+    ).brief
+
+    assert "(0.00,0.58)-(0.50,0.58) offset (+0.00, +0.02)" in brief
+
+
+def test_comparison_full_gives_the_second_edge_and_the_overrun() -> None:
+    """The second edge lies 8 pixels lower and runs 32 pixels, a quarter of the first, further."""
+    first = np.array([[0.0, 40.0, 128.0, 40.0]])
+    second = np.array([[0.0, 48.0, 160.0, 48.0]])
+    pairing = Pairing((EdgePair(0, 0, (0.0, 8.0), (0.0, 32.0)),), (), (), (), ())
+
+    full = measure_comparison(
+        comparison_test_alignment(), pairing, first, second, (256, 256), (256, 256)
+    ).full
+
+    assert "to (0.00,0.19)-(0.62,0.19) in the second image, ends +0.00 and +0.25" in full
+
+
+def test_comparison_full_counts_broken_pieces_apart_from_unmatched() -> None:
+    first = np.array([[0.0, 40.0, 128.0, 40.0], [0.0, 200.0, 64.0, 200.0]])
+    second = np.array([[0.0, 40.0, 60.0, 40.0], [70.0, 40.0, 128.0, 40.0]])
+    pairing = Pairing((EdgePair(0, 0, (0.0, 0.0), (0.0, -68.0)),), (1,), (), (), (1,))
+
+    measurement = measure_comparison(
+        identity_alignment((256, 256), (256, 256)), pairing, first, second, (256, 256), (256, 256)
+    )
+
+    assert "unmatched 1 in the first image and 0 in the second" in measurement.brief
+    assert "not counted as unmatched: 0 in the first image and 1 in the second" in measurement.full
+    assert "Longest unmatched in the first image: (0.00,0.78)-(0.25,0.78)." in measurement.full
+    assert "Compared in one shared frame as asked" in measurement.brief
+
+
+def test_comparison_withheld_text_has_no_pairs() -> None:
+    first, second, _ = comparison_test_rows([2.0])
+
+    brief = measure_comparison(
+        Withheld("views too different to align"), None, first, second, (256, 256), (256, 256)
+    ).brief
+
+    assert brief == (
+        "Alignment withheld: views too different to align. No edges were paired. Straight "
+        "edges found: 1 in the first image and 1 in the second."
+    )
+
+
+def test_comparison_flags_ambiguous_alignment() -> None:
+    first, second, pairing = comparison_test_rows([2.0])
+
+    brief = measure_comparison(
+        comparison_test_alignment(ambiguous=True), pairing, first, second, (256, 256), (256, 256)
+    ).brief
+
+    assert "A second alignment fits 20 of the other features" in brief
+    assert "the pairs assume the first" in brief
 
 
 def test_edges_density_white_on_black() -> None:

@@ -28,7 +28,18 @@ from controlnet_mcp.regions import CropRegion
 from controlnet_mcp.segmentation import RegionPrompt
 from controlnet_mcp.server import SERVER_INSTRUCTIONS, build_server
 
-MODEL_NAMES = ("Zoe", "MLSD", "SAM", "BAE", "BEiT", "Canny", "ControlNet")
+MODEL_NAMES = (
+    "Zoe",
+    "MLSD",
+    "SAM",
+    "BAE",
+    "BEiT",
+    "Canny",
+    "ControlNet",
+    "SIFT",
+    "MAGSAC",
+    "RANSAC",
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -116,6 +127,7 @@ async def test_lists_tools_with_schemas(client: Client) -> None:
         "get_reference_image",
         "analyze_image",
         "sample_analysis",
+        "compare_images",
     }
     analysis_schema = tools["analyze_image"].input_schema["properties"]["analysis"]
     assert set(analysis_schema["enum"]) == {
@@ -530,6 +542,41 @@ async def test_sample_with_malformed_point_is_error(
 
     assert result.is_error is True
     assert "between 0 and 1" in result.content[0].text
+
+
+async def test_compare_description_says_neither_image_is_correct(client: Client) -> None:
+    description = await tool_description(client, "compare_images")
+
+    assert "Neither image is treated as the correct one" in description
+    assert "parallax" in description
+    assert "not that they are the same physical edge" in description
+
+
+async def test_compare_align_schema(client: Client) -> None:
+    tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    schema = tools["compare_images"].input_schema
+    assert schema["properties"]["align"]["enum"] == ["fit", "none"]
+    assert schema["required"] == ["first", "second"]
+
+
+async def test_compare_none_with_different_proportions_is_error(client: Client) -> None:
+    """chair.png is 64x32 and table.jpg is 16x16."""
+    result = await client.call_tool(
+        "compare_images", {"first": "chair.png", "second": "table.jpg", "align": "none"}
+    )
+
+    assert result.is_error is True
+    assert "proportions" in result.content[0].text
+
+
+async def test_compare_without_the_checkpoint_is_error(client: Client) -> None:
+    result = await client.call_tool(
+        "compare_images", {"first": "chair.png", "second": "chair.png"}
+    )
+
+    assert result.is_error is True
+    assert PREPARE_COMMAND in result.content[0].text
 
 
 async def test_analyze_unknown_kind_is_error(client: Client) -> None:

@@ -379,8 +379,6 @@ def _run_lines(
     drawn and measured.
     """
     del prompt
-    if not isinstance(detector, MLSDdetector):
-        raise TypeError(f"Expected an MLSDdetector, got {type(detector).__name__}")
     segments, width, height = detect_line_segments(detector, image, resolution)
     long_only = options.line_length == "long"
     if long_only:
@@ -411,8 +409,6 @@ def _run_perspective(
     crop, which withholds the camera estimate.
     """
     del prompt, options
-    if not isinstance(detector, MLSDdetector):
-        raise TypeError(f"Expected an MLSDdetector, got {type(detector).__name__}")
     segments, width, height = detect_line_segments(detector, image, resolution)
     result = analyze_perspective(segments, width, height, cropped=region != FULL_IMAGE)
     canvas = np.zeros((height, width, 3), dtype=np.uint8)
@@ -439,14 +435,24 @@ def _run_perspective(
 
 
 def detect_line_segments(
-    detector: MLSDdetector, image: Image.Image, resolution: int
+    detector: object, image: Image.Image, resolution: int
 ) -> tuple[np.ndarray, int, int]:
     """Detect the straight segments of an image at a detect resolution.
+
+    Args:
+        detector: The detector built for the lines analysis.
+        image: The RGB image to detect in.
+        resolution: The detect resolution.
 
     Returns:
         The endpoint quadruples ``x0, y0, x1, y1`` in detection pixels, shaped
         (N, 4), and the width and height of the frame they were detected in.
+
+    Raises:
+        TypeError: When ``detector`` is not the line detector.
     """
+    if not isinstance(detector, MLSDdetector):
+        raise TypeError(f"Expected an MLSDdetector, got {type(detector).__name__}")
     pixels = np.array(resize_for_detection(image, resolution), dtype=np.uint8)
     height, width = pixels.shape[:2]
     return _predict_line_segments(detector, pixels), width, height

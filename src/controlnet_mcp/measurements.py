@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from controlnet_mcp.comparison import Alignment, Pairing
 from controlnet_mcp.evidence import Withheld
 from controlnet_mcp.perspective import (
     INLIER_DEGREES,
@@ -331,6 +332,121 @@ def _shared_lines_phrase(
             f"group {line.family + 1} {ends} in {len(line.segment_indices)} pieces{between}"
         )
     return " Edges sharing one line: " + "; ".join(entries) + "."
+
+
+def measure_comparison(
+    alignment: Alignment | Withheld,
+    pairing: Pairing | None,
+    first_segments: np.ndarray,
+    second_segments: np.ndarray,
+    first_size: tuple[int, int],
+    second_size: tuple[int, int],
+    region: CropRegion = FULL_IMAGE,
+    second_region: CropRegion | None = None,
+) -> Measurement:
+    """Report how two images were aligned and how far apart their paired edges lie.
+
+    The brief form says how the images were brought into one frame and what
+    supports that, counts the pairs and the unmatched edges of each image,
+    and lists the pairs lying furthest apart. Each is given by the first
+    image's edge and the offset of the second image's edge from it, as
+    fractions of the first image's width and height. The full form lists more
+    pairs, adds the second image's edge in its own image's fractions and how
+    far it overruns each end of the first edge as a share of that edge's
+    length, and names the longest unmatched edges. When the alignment is
+    withheld there are no pairs, and the text gives the reason.
+
+    Args:
+        alignment: How the second image maps onto the first, or why not.
+        pairing: The pairs, or None when the alignment is withheld.
+        first_segments: The first image's segments in its detection pixels.
+        second_segments: The second image's segments in its detection pixels.
+        first_size: Width and height of the first image's detection frame.
+        second_size: Width and height of the second image's detection frame.
+        region: The part of the first reference image its frame was rendered from.
+        second_region: The same for the second image; ``region`` when None.
+    """
+    second_region = second_region if second_region is not None else region
+    first = np.asarray(first_segments, dtype=np.float64).reshape(-1, 4)
+    second = np.asarray(second_segments, dtype=np.float64).reshape(-1, 4)
+    if isinstance(alignment, Withheld) or pairing is None:
+        reason = alignment.reason if isinstance(alignment, Withheld) else "no pairing was made"
+        return _both_forms(
+            f"Alignment withheld: {reason}. No edges were paired. Straight edges found: "
+            f"{len(first)} in the first image and {len(second)} in the second."
+        )
+    noun = "pair" if len(pairing.pairs) == 1 else "pairs"
+    opening = (
+        f"{_alignment_phrase(alignment)} {len(pairing.pairs)} {noun} of edges; unmatched "
+        f"{len(pairing.unmatched_first)} in the first image and "
+        f"{len(pairing.unmatched_second)} in the second."
+    )
+    ordered = sorted(pairing.pairs, key=lambda pair: math.hypot(*pair.offset), reverse=True)
+    brief_pairs = []
+    full_pairs = []
+    for pair in ordered[:LINE_LIMIT_FULL]:
+        edge = _endpoints(first[pair.first_index].tolist(), *first_size, region)
+        across_x = pair.offset[0] / first_size[0] * (region.x1 - region.x0)
+        across_y = pair.offset[1] / first_size[1] * (region.y1 - region.y0)
+        entry = f"{edge} offset ({_signed(across_x)}, {_signed(across_y)})"
+        brief_pairs.append(entry)
+        partner = _endpoints(second[pair.second_index].tolist(), *second_size, second_region)
+        length = _segment_length(first[pair.first_index].tolist())
+        start, end = (overrun / length for overrun in pair.end_offsets)
+        full_pairs.append(
+            f"{entry} to {partner} in the second image, ends {_signed(start)} and {_signed(end)}"
+        )
+    if not ordered:
+        return _both_forms(opening)
+    broken = (
+        f" Pieces of matched edges, not counted as unmatched: "
+        f"{len(pairing.on_matched_line_first)} in the first image and "
+        f"{len(pairing.on_matched_line_second)} in the second."
+    )
+    unmatched = _longest_unmatched(
+        first, pairing.unmatched_first, first_size, region, "first"
+    ) + _longest_unmatched(second, pairing.unmatched_second, second_size, second_region, "second")
+    return Measurement(
+        brief=f"{opening} Furthest apart: " + "; ".join(brief_pairs[:LINE_LIMIT_BRIEF]) + ".",
+        full=f"{opening} Furthest apart: " + "; ".join(full_pairs) + f".{broken}{unmatched}",
+    )
+
+
+def _signed(value: float) -> str:
+    """A value to two decimals with its sign, zero always written as +0.00."""
+    return f"{round(value, 2) + 0.0:+.2f}"
+
+
+def _alignment_phrase(alignment: Alignment) -> str:
+    """How the images were brought into one frame, and what supports it."""
+    if not alignment.fitted:
+        return "Compared in one shared frame as asked, with no alignment fitted."
+    fitted = (
+        f"Aligned by a transform fitted to {alignment.inliers} of {alignment.matched} matching "
+        f"features, which cover {alignment.coverage:.0%} of the first image."
+    )
+    if not alignment.ambiguous:
+        return fitted
+    return (
+        f"{fitted} A second alignment fits {alignment.second_fit_inliers} of the other "
+        "features, as a second plane or repeating structure produces; the pairs assume the "
+        "first."
+    )
+
+
+def _longest_unmatched(
+    segments: np.ndarray,
+    indices: Sequence[int],
+    size: tuple[int, int],
+    region: CropRegion,
+    image: str,
+) -> str:
+    """The longest unmatched edges of one image, with a leading space, or nothing."""
+    if not indices:
+        return ""
+    ordered = sorted((segments[index].tolist() for index in indices), key=_segment_length)
+    longest = [_endpoints(edge, *size, region) for edge in ordered[::-1][:LINE_LIMIT_BRIEF]]
+    return f" Longest unmatched in the {image} image: " + ", ".join(longest) + "."
 
 
 def _share(mask: np.ndarray) -> float:

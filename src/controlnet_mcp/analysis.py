@@ -14,14 +14,23 @@ import numpy as np
 from PIL import Image
 
 from controlnet_mcp.cache import AnalysisCache, image_digest
+from controlnet_mcp.comparison import (
+    Alignment,
+    AlignMode,
+    align_images,
+    identity_alignment,
+    pair_edges,
+    render_comparison,
+)
 from controlnet_mcp.config import MAX_RESOLUTION, MIN_RESOLUTION, Settings
+from controlnet_mcp.evidence import Withheld
 from controlnet_mcp.images import (
     decode_reference_image,
     image_to_png_bytes,
     png_size_and_measurement,
     resolve_reference_path,
 )
-from controlnet_mcp.measurements import Measurement
+from controlnet_mcp.measurements import Measurement, measure_comparison
 from controlnet_mcp.model_manager import ModelManager, select_device
 from controlnet_mcp.processors import (
     DEFAULT_OPTIONS,
@@ -29,6 +38,7 @@ from controlnet_mcp.processors import (
     AnalysisOptions,
     OptionError,
     ProcessorSpec,
+    detect_line_segments,
     get_processor,
 )
 from controlnet_mcp.regions import FULL_IMAGE, CropError, CropRegion
@@ -39,7 +49,7 @@ from controlnet_mcp.sampling import (
     sample_line,
     sample_points,
 )
-from controlnet_mcp.segmentation import PromptError, RegionPrompt
+from controlnet_mcp.segmentation import PromptError, RegionPrompt, resize_for_detection
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +77,38 @@ class AnalysisResult:
     description: str
     measurement: str
     crop: CropRegion | None = None
+
+
+@dataclass(frozen=True)
+class ComparisonResult:
+    """One comparison image plus the facts a tool response reports about it.
+
+    ``measurement`` holds the form of the comparison's measurement that the
+    settings select, and is empty when measurements are switched off. ``crop``
+    is the part of the first image that was compared, aligned to its pixels,
+    or None when the whole images were.
+    """
+
+    png: bytes
+    measurement: str
+    crop: CropRegion | None
+    align: AlignMode
+    resolution: int
+
+
+@dataclass(frozen=True)
+class _DetectedEdges:
+    """One image of a comparison, prepared for detection, with its straight segments."""
+
+    image: Image.Image
+    segments: np.ndarray
+    region: CropRegion
+    snapped: CropRegion | None
+
+    @property
+    def size(self) -> tuple[int, int]:
+        """Width and height of the frame the segments were detected in."""
+        return self.image.size
 
 
 @dataclass(frozen=True)
@@ -260,6 +302,105 @@ class AnalysisService:
             analysis=spec.kind, samples=sample_points(value_map, points, region), changes=[]
         )
 
+    def compare(
+        self,
+        first: str,
+        second: str,
+        align: AlignMode = "fit",
+        resolution: int | None = None,
+        crop: CropRegion | None = None,
+    ) -> ComparisonResult:
+        """Pair the straight edges of two reference images and measure how far apart they lie.
+
+        Nothing is cached: the comparison serves a loop in which one of the
+        images changes with every call.
+
+        Args:
+            first: Bare file name of the image whose frame the result is in.
+            second: Bare file name of the image compared with it.
+            align: ``fit`` fits a transform from features the images share;
+                ``none`` takes the images to share one frame already.
+            resolution: Detection resolution; ``None`` uses the configured default.
+            crop: Part of each image to compare, as the same fractions of both.
+
+        Raises:
+            ReferenceImageError: When a filename is not an allowed reference image.
+            ResolutionError: When ``resolution`` is outside the accepted range.
+            CropError: When the crop is too small for either image.
+            ComparisonError: When ``align`` is ``none`` and the images do not
+                have the same proportions.
+            MissingCheckpointError: When the line detector's checkpoint is not installed.
+        """
+        resolution = self._validated_resolution(resolution)
+        names = (first, second)
+        prepared = [self._prepared_for_comparison(name, resolution, crop) for name in names]
+        alignment: Alignment | Withheld | None = None
+        if align == "none":
+            # Refused before any detection runs, since the sizes alone decide it.
+            alignment = identity_alignment(prepared[0][0].size, prepared[1][0].size)
+        edges = []
+        with self._inference_lock:
+            detector = self.model_manager.get(PROCESSORS["lines"])
+            for name, (image, region, snapped) in zip(names, prepared, strict=True):
+                logger.info("Detecting straight edges of %s at %d", name, resolution)
+                segments, _, _ = detect_line_segments(detector, image, resolution)
+                edges.append(_DetectedEdges(image, segments, region, snapped))
+        one, other = edges
+        if alignment is None:
+            alignment = align_images(_gray_pixels(one.image), _gray_pixels(other.image))
+        pairing = None
+        if isinstance(alignment, Alignment):
+            pairing = pair_edges(one.segments, other.segments, alignment.transform, one.size)
+        rendered = render_comparison(
+            np.array(one.image, dtype=np.uint8),
+            np.array(other.image, dtype=np.uint8),
+            one.segments,
+            other.segments,
+            alignment,
+            pairing,
+        )
+        measurement = measure_comparison(
+            alignment,
+            pairing,
+            one.segments,
+            other.segments,
+            one.size,
+            other.size,
+            one.region,
+            other.region,
+        )
+        logger.info(
+            "Compared %s with %s: %d pairs",
+            first,
+            second,
+            len(pairing.pairs) if pairing is not None else 0,
+        )
+        return ComparisonResult(
+            png=image_to_png_bytes(Image.fromarray(rendered), measurement),
+            measurement=self._selected_form(measurement),
+            crop=one.snapped,
+            align=align,
+            resolution=resolution,
+        )
+
+    def _prepared_for_comparison(
+        self, filename: str, resolution: int, crop: CropRegion | None
+    ) -> tuple[Image.Image, CropRegion, CropRegion | None]:
+        """One image of a comparison, cropped and resized for detection.
+
+        Returns:
+            The image at its detection size, the part of the reference it
+            shows, and that part as a crop aligned to the image's pixels, or
+            None when the whole image is shown.
+        """
+        path = resolve_reference_path(self.settings.reference_image_dir, filename)
+        image = decode_reference_image(path.read_bytes(), filename)
+        if crop is None:
+            return resize_for_detection(image, resolution), FULL_IMAGE, None
+        snapped = crop.snapped(image.width, image.height)
+        image = image.crop(snapped.pixel_box(image.width, image.height))
+        return resize_for_detection(image, resolution), snapped, snapped
+
     def _selected_form(self, measurement: Measurement) -> str:
         """The measurement text the configured verbosity emits.
 
@@ -282,6 +423,11 @@ class AnalysisService:
                 f"{MIN_RESOLUTION} to {MAX_RESOLUTION}."
             )
         return resolution
+
+
+def _gray_pixels(image: Image.Image) -> np.ndarray:
+    """An image as 8-bit grayscale pixels."""
+    return np.array(image.convert("L"), dtype=np.uint8)
 
 
 def _check_prompt(spec: ProcessorSpec, prompt: RegionPrompt | None) -> None:

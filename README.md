@@ -17,6 +17,7 @@ analysis so repeated requests do not rerun inference.
 | `get_reference_image(filename)` | The original image as MCP image content. |
 | `analyze_image(filename, analysis, resolution=None, box=None, point=None, exclude=None, extent=None, crop=None, line_length=None)` | One analysis image plus a one-line description. |
 | `sample_analysis(filename, analysis, points=None, line=None, count=None, resolution=None, crop=None)` | The values of a depth or normals analysis at chosen positions, as structured output. |
+| `compare_images(first, second, align="fit", resolution=None, crop=None)` | The straight edges of two images paired, with how far apart each pair lies, as text and an image. |
 
 `analysis` is one of `depth`, `normals`, `lineart`, `lines`, `perspective`, `segments`, or
 `canny`. The names are semantic on purpose: the backing model for any of them can change without
@@ -71,6 +72,19 @@ render; they are not distances. Normal values are directions relative to the cam
 face reads differently from another viewpoint. Sky and open background get values in both maps,
 usually steady ones, so a steady reading does not mean a surface is there. Any other analysis is
 rejected.
+
+`compare_images` detects the straight edges of two images, brings the second image into the
+frame of the first, and pairs edges that lie close in direction and position. Each pair reports
+the offset between its edges in fractions of the first image, and neither image is treated as the
+correct one. With `align` set to `fit`, the default, one flat transform is fitted from features
+the two images share. The result states how many features support it and how much of the image
+they cover, and flags the alignment as ambiguous when a second transform is supported nearly as
+well. When too few features match, the alignment is withheld with the reason, no pairs are
+reported, and the image shows the two sets of edges side by side. With `align` set to `none` the
+caller asserts that the images already share one frame, as a render from a matching camera does,
+and images of different proportions are refused. The offsets left after a fitted transform mix
+real differences with the parallax of depth whenever the viewpoints differ, so the tool does not
+relate views of a scene taken from different positions. Comparisons are not cached.
 
 Every analysis measures its own output. A short and a long form of that measurement are stored
 with the cached image, and `RESULT_MEASUREMENTS` in `.env` decides which one the agent sees.

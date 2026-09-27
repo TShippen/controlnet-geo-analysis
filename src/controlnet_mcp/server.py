@@ -16,7 +16,13 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from controlnet_mcp import images
-from controlnet_mcp.analysis import AnalysisResult, AnalysisService, ResolutionError
+from controlnet_mcp.analysis import (
+    AnalysisResult,
+    AnalysisService,
+    ComparisonResult,
+    ResolutionError,
+)
+from controlnet_mcp.comparison import AlignMode, ComparisonError
 from controlnet_mcp.config import MeasurementSetting, apply_download_policy, load_settings
 from controlnet_mcp.images import ReferenceImageError, ReferenceImageInfo
 from controlnet_mcp.model_manager import MissingCheckpointError
@@ -56,8 +62,29 @@ SERVER_INSTRUCTIONS = (
     "parts, lineart to trace profiles, normals to choose flat or curved surfaces for each part, "
     "depth to order parts front to back, and canny last for a missing detail. Once a depth or "
     "normals analysis shows where to look, read its values at those positions with "
-    "sample_analysis. No analysis gives absolute size; get one known dimension from the user or "
-    "the image."
+    "sample_analysis. To check a render of your model against a reference, or one reference "
+    "against another, pair their straight edges with compare_images. No analysis gives absolute "
+    "size; get one known dimension from the user or the image."
+)
+
+COMPARISON_DESCRIPTION = (
+    "Pair the straight edges of two reference images and report how far apart each pair lies. "
+    "Neither image is treated as the correct one. The image shows the first image dimmed, its "
+    "edges in cyan, the second image's edges in magenta, and a yellow line joining the two "
+    "edges of each pair.\n"
+    "- align fit: one flat transform is fitted from features the two images share, and the "
+    "offsets are what remains after it. Whenever the viewpoints differ, the offsets mix real "
+    "differences with the parallax of depth, and the result cannot tell them apart.\n"
+    "- align none: you assert that the two images already share one frame, such as a render "
+    "made from the same camera. Images of different proportions are refused.\n"
+    "A pair means two edges lie close in direction and position, not that they are the same "
+    "physical edge, and repeating structure can pair an edge with its neighbor. The result "
+    "says when a second alignment is supported nearly as well as the first, as a second plane "
+    "in the scene produces. Rows of identical parts leave few features to fit, and an "
+    "alignment that is one repeat off is not always caught. When too few features "
+    "match, the result says the views cannot be aligned and gives no pairs, and the image "
+    "shows the two sets of edges side by side. This tool does not relate views of a 3D scene "
+    "taken from different positions."
 )
 
 _EXPECTED_ERRORS = (
@@ -68,6 +95,7 @@ _EXPECTED_ERRORS = (
     CropError,
     OptionError,
     SamplingError,
+    ComparisonError,
     MissingCheckpointError,
 )
 
@@ -80,9 +108,9 @@ def build_server(service: AnalysisService) -> MCPServer:
     describe the same service.
 
     Args:
-        service: The analysis service backing ``analyze_image`` and
-            ``sample_analysis``, and the source of the configuration every
-            tool reads.
+        service: The analysis service backing ``analyze_image``,
+            ``sample_analysis``, and ``compare_images``, and the source of the
+            configuration every tool reads.
     """
     measurement_mode = service.settings.result_measurements
     mcp = MCPServer(SERVER_NAME, instructions=SERVER_INSTRUCTIONS)
@@ -264,6 +292,58 @@ def build_server(service: AnalysisService) -> MCPServer:
         except _EXPECTED_ERRORS as exc:
             raise ToolError(str(exc)) from exc
 
+    @mcp.tool(annotations=read_only, description=COMPARISON_DESCRIPTION)
+    def compare_images(
+        first: Annotated[
+            str,
+            Field(
+                description=(
+                    "A name from list_reference_images. Positions and offsets in the result "
+                    "are fractions of this image."
+                )
+            ),
+        ],
+        second: Annotated[
+            str, Field(description="A name from list_reference_images, compared with the first.")
+        ],
+        align: Annotated[
+            AlignMode,
+            Field(
+                description=(
+                    "fit, the default, fits a transform from features the images share. none "
+                    "takes the images to share one frame already."
+                )
+            ),
+        ] = "fit",
+        resolution: Annotated[
+            int | None,
+            Field(
+                description=(
+                    "Working resolution for the short side of each image, 64 to 2048. "
+                    "Leave unset for the default."
+                )
+            ),
+        ] = None,
+        crop: Annotated[
+            list[float] | None,
+            Field(
+                description=(
+                    "Compare only this part of each image: [x0, y0, x1, y1] as fractions of "
+                    "width and height, origin top-left, top-left corner first. The same "
+                    "fractions are cut from both images."
+                )
+            ),
+        ] = None,
+    ) -> list[str | Image]:
+        """Compare the straight edges of two images and return the summary text and image."""
+        try:
+            region = CropRegion.from_list(crop) if crop is not None else None
+            result = service.compare(first, second, align, resolution, region)
+        except _EXPECTED_ERRORS as exc:
+            raise ToolError(str(exc)) from exc
+        text = _comparison_text(result, first, second)
+        return [text, Image(data=result.png, format="png")]
+
     return mcp
 
 
@@ -311,6 +391,29 @@ def _sample_analysis_description() -> str:
         "which surface a sample belongs to, and what a value means for the object, is up to "
         "you."
     )
+
+
+def _comparison_text(result: ComparisonResult, first: str, second: str) -> str:
+    """The text block returned beside the comparison image.
+
+    It names the two images, how they were brought into one frame, and the
+    part compared when they were cropped, followed by the measurement. With
+    measurements off the measurement is empty and the text ends there.
+    """
+    cropped = ""
+    if result.crop is not None:
+        region = result.crop
+        cropped = (
+            f", cropped to x {region.x0:.2f} to {region.x1:.2f}, "
+            f"y {region.y0:.2f} to {region.y1:.2f}"
+        )
+    summary = (
+        f"Comparison of {first} with {second}{cropped}, align {result.align}, "
+        f"at resolution {result.resolution}."
+    )
+    if not result.measurement:
+        return summary
+    return f"{summary} {result.measurement}"
 
 
 def _result_text(result: AnalysisResult, filename: str, mode: MeasurementSetting) -> str:
