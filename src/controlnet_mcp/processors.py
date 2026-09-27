@@ -1,4 +1,4 @@
-"""Registry of the six geometric analyses and how to build and run each detector.
+"""Registry of the geometric analyses and how to build and run each detector.
 
 Each analysis is described once here: the agent-facing sentence returned with
 the image, the checkpoints it needs on disk, how to construct the
@@ -40,14 +40,22 @@ from controlnet_mcp.checkpoints import (
 from controlnet_mcp.measurements import (
     BEYOND_RANGE_MAX,
     EMPTY_MEASUREMENT,
+    GROUP_COLORS,
     Measurement,
     measure_depth,
     measure_edges,
     measure_lines,
     measure_mask,
     measure_normals,
+    measure_perspective,
 )
-from controlnet_mcp.regions import CropRegion
+from controlnet_mcp.perspective import (
+    COLLINEAR_PIXELS,
+    INLIER_DEGREES,
+    Horizon,
+    analyze_perspective,
+)
+from controlnet_mcp.regions import FULL_IMAGE, CropRegion
 from controlnet_mcp.sampling import ValueMap
 from controlnet_mcp.segmentation import (
     PromptedSegmenter,
@@ -59,9 +67,19 @@ from controlnet_mcp.segmentation import (
 
 logger = logging.getLogger(__name__)
 
-AnalysisKind = Literal["depth", "normals", "lineart", "lines", "segments", "canny"]
+AnalysisKind = Literal[
+    "depth", "normals", "lineart", "lines", "perspective", "segments", "canny"
+]
 
-ANALYSIS_KINDS: tuple[str, ...] = ("depth", "normals", "lineart", "lines", "segments", "canny")
+ANALYSIS_KINDS: tuple[str, ...] = (
+    "depth",
+    "normals",
+    "lineart",
+    "lines",
+    "perspective",
+    "segments",
+    "canny",
+)
 
 SampledKind = Literal["depth", "normals"]
 
@@ -75,6 +93,9 @@ LINE_DISTANCE_THRESHOLD = 0.1
 LONG_LINE_FRACTION = 0.06
 
 LineLength = Literal["all", "long"]
+
+UNASSIGNED_COLOR = (64, 64, 64)
+HORIZON_COLOR = (255, 255, 255)
 
 
 class UnknownAnalysisError(Exception):
@@ -152,6 +173,9 @@ class ProcessorSpec:
         values_description: What the sampled values of this analysis are and
             are not. Part of the sampling tool's description, so it never
             names a model. Set whenever ``read_values`` is.
+        detector: The analysis whose detector this one runs, when it has none
+            of its own. Analyses naming the same detector share one loaded
+            model. None when the analysis has its own detector.
     """
 
     kind: str
@@ -168,6 +192,12 @@ class ProcessorSpec:
     version: str = "1"
     read_values: Callable[[np.ndarray], ValueMap] | None = None
     values_description: str = ""
+    detector: str | None = None
+
+    @property
+    def detector_key(self) -> str:
+        """The name the detector is loaded and kept under: ``detector``, or else ``kind``."""
+        return self.detector or self.kind
 
     @property
     def requires_model(self) -> bool:
@@ -351,20 +381,81 @@ def _run_lines(
     del prompt
     if not isinstance(detector, MLSDdetector):
         raise TypeError(f"Expected an MLSDdetector, got {type(detector).__name__}")
-    pixels = np.array(resize_for_detection(image, resolution), dtype=np.uint8)
-    height, width = pixels.shape[:2]
-    segments = _predict_line_segments(detector, pixels)
+    segments, width, height = detect_line_segments(detector, image, resolution)
     long_only = options.line_length == "long"
     if long_only:
         segments = _long_segments(segments, LONG_LINE_FRACTION * max(width, height))
-    canvas = np.zeros_like(pixels)
-    for x0, y0, x1, y1 in segments:
-        cv2.line(canvas, (int(x0), int(y0)), (int(x1), int(y1)), (255, 255, 255), 1)
+    canvas = np.zeros((height, width, 3), dtype=np.uint8)
+    for segment in segments:
+        _draw_segment(canvas, segment, (255, 255, 255))
     logger.info("Kept %d straight segments at %dx%d", len(segments), width, height)
     return AnalysisOutput(
         image=Image.fromarray(canvas),
         measurement=measure_lines(segments.tolist(), width, height, region, long_only),
     )
+
+
+def _run_perspective(
+    detector: object,
+    image: Image.Image,
+    resolution: int,
+    prompt: RegionPrompt | None,
+    region: CropRegion,
+    options: AnalysisOptions,
+) -> AnalysisOutput:
+    """Group the detected straight segments by perspective, draw the groups, and measure them.
+
+    Each group is drawn in its own color, segments in no group are drawn dark
+    gray, and the horizon, when it could be placed, is drawn white across the
+    frame beneath the segments. An image analyzed in part is treated as a
+    crop, which withholds the camera estimate.
+    """
+    del prompt, options
+    if not isinstance(detector, MLSDdetector):
+        raise TypeError(f"Expected an MLSDdetector, got {type(detector).__name__}")
+    segments, width, height = detect_line_segments(detector, image, resolution)
+    result = analyze_perspective(segments, width, height, cropped=region != FULL_IMAGE)
+    canvas = np.zeros((height, width, 3), dtype=np.uint8)
+    if isinstance(result.horizon, Horizon):
+        left = (0, round(result.horizon.left_y * height))
+        right = (width - 1, round(result.horizon.right_y * height))
+        cv2.line(canvas, left, right, HORIZON_COLOR, 1)
+    for segment in segments:
+        _draw_segment(canvas, segment, UNASSIGNED_COLOR)
+    for family, (_, color) in zip(result.families, GROUP_COLORS, strict=False):
+        for index in family.segment_indices:
+            _draw_segment(canvas, segments[index], color)
+    logger.info(
+        "Grouped %d straight segments into %d families at %dx%d",
+        len(segments),
+        len(result.families),
+        width,
+        height,
+    )
+    return AnalysisOutput(
+        image=Image.fromarray(canvas),
+        measurement=measure_perspective(result, width, height, region),
+    )
+
+
+def detect_line_segments(
+    detector: MLSDdetector, image: Image.Image, resolution: int
+) -> tuple[np.ndarray, int, int]:
+    """Detect the straight segments of an image at a detect resolution.
+
+    Returns:
+        The endpoint quadruples ``x0, y0, x1, y1`` in detection pixels, shaped
+        (N, 4), and the width and height of the frame they were detected in.
+    """
+    pixels = np.array(resize_for_detection(image, resolution), dtype=np.uint8)
+    height, width = pixels.shape[:2]
+    return _predict_line_segments(detector, pixels), width, height
+
+
+def _draw_segment(canvas: np.ndarray, segment: np.ndarray, color: tuple[int, int, int]) -> None:
+    """Draw one segment a pixel wide onto an RGB canvas."""
+    x0, y0, x1, y1 = segment
+    cv2.line(canvas, (int(x0), int(y0)), (int(x1), int(y1)), color, 1)
 
 
 def _long_segments(segments: np.ndarray, min_length: float) -> np.ndarray:
@@ -523,6 +614,36 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         run=_run_lines,
         accepts_line_length=True,
         version="2",
+    ),
+    "perspective": ProcessorSpec(
+        kind="perspective",
+        description=(
+            "Straight edges grouped by the direction they run in the scene. The first group is "
+            "drawn red, the second green, the third blue, and edges in no group dark gray. The "
+            "edges of a group either meet at one vanishing point, which often lies outside the "
+            "image, or run parallel. A white line is the horizon, drawn only when it could be "
+            "placed."
+        ),
+        use_when=(
+            "Use it on scenes with straight parallel edges: to find where the main directions "
+            "converge, which edges share one line, and, when the evidence allows, the field of "
+            "view and tilt of the camera. It reports groups, not meanings. Which group is "
+            "vertical in the scene, and whether the groups are perpendicular, are assumptions, "
+            "and the result names the ones it made. A crop, fewer than two converging groups, "
+            "or groups that contradict being perpendicular withhold the camera estimate, and "
+            "the result gives the reason. Curved or organic subjects produce no groups, and "
+            "photos with straightened verticals show a parallel group. An edge joins a group "
+            f"when it points within {INLIER_DEGREES:.0f} degrees of that group's vanishing "
+            "point, so a few edges of a group may belong to another direction. Edges are "
+            f"reported as sharing one line when each lies within {COLLINEAR_PIXELS:.0f} pixels "
+            "of the other's line, so closely spaced parallel edges can be chained together. A "
+            "vanishing point far outside the image is placed less precisely than a near one, "
+            "and so is whatever is derived from it. It gives no position, distance, or size."
+        ),
+        checkpoints=(MLSD_CHECKPOINT,),
+        build=_build_lines,
+        run=_run_perspective,
+        detector="lines",
     ),
     "segments": ProcessorSpec(
         kind="segments",

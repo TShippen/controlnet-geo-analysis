@@ -3,19 +3,32 @@
 Every expected value is hand-counted from the tiny array built in the test.
 """
 
+import dataclasses
+
 import numpy as np
 
+from conftest import camera_scene_test_segments
+from controlnet_mcp.evidence import Withheld
 from controlnet_mcp.measurements import (
     measure_depth,
     measure_edges,
     measure_lines,
     measure_mask,
     measure_normals,
+    measure_perspective,
+)
+from controlnet_mcp.perspective import (
+    CameraEstimate,
+    Horizon,
+    LineFamily,
+    PerspectiveResult,
+    analyze_perspective,
 )
 from controlnet_mcp.regions import CropRegion
 
 FACING_CAMERA = (128, 128, 255)
 TURNED_LEFT = (218, 128, 218)
+NOTHING_WITHHELD = Withheld("not part of this test")
 
 
 def test_depth_shares() -> None:
@@ -185,6 +198,143 @@ def test_normals_gradient_is_curved() -> None:
 
     # Only the last column has no right neighbour to differ from: 31 of 32 columns curve.
     assert "curved 97%" in measurement.brief
+
+
+def perspective_test_result(
+    families: tuple[LineFamily, ...] = (),
+    camera: CameraEstimate | Withheld = NOTHING_WITHHELD,
+) -> PerspectiveResult:
+    """A perspective result built by hand, with the horizon withheld."""
+    return PerspectiveResult(
+        families=families,
+        unassigned=0,
+        shared_lines=(),
+        horizon=NOTHING_WITHHELD,
+        camera=camera,
+    )
+
+
+def perspective_test_family(point: tuple[float, float]) -> LineFamily:
+    """A family of eight segments meeting at ``point``."""
+    return LineFamily(
+        segment_indices=tuple(range(8)),
+        vanishing_point=point,
+        direction_degrees=0.0,
+        scatter_degrees=0.0,
+        length_share=1.0,
+    )
+
+
+def test_perspective_brief_names_families() -> None:
+    """In a frame 512 wide, x 948.8 is 1.85 of the width and x 25.1 is 0.05."""
+    result = analyze_perspective(camera_scene_test_segments(), 512, 512, cropped=False)
+
+    brief = measure_perspective(result, 512, 512).brief
+
+    assert "vanishes at (1.85, 0.50)" in brief
+    assert "vanishes at (0.05, 0.50)" in brief
+    assert "parallel at 90°" in brief
+
+
+def test_perspective_brief_reports_the_camera_with_its_assumption() -> None:
+    """The camera scene has focal length 400: a field of view of 65 degrees, level, upright."""
+    result = analyze_perspective(camera_scene_test_segments(), 512, 512, cropped=False)
+
+    brief = measure_perspective(result, 512, 512).brief
+
+    assert "Camera estimate from 1 pair of converging groups, which nothing checks:" in brief
+    assert "field of view 65° across the width, level, verticals upright, assuming" in brief
+    assert "Horizon crosses the left border at y 0.50 and the right border at y 0.50" in brief
+
+
+def test_perspective_vanishing_point_maps_through_crop() -> None:
+    """Local x 1024 is twice the frame width; in a crop of the right half that is 1.50."""
+    result = perspective_test_result((perspective_test_family((1024.0, 256.0)),))
+
+    brief = measure_perspective(result, 512, 512, CropRegion(0.5, 0.0, 1.0, 1.0)).brief
+
+    assert "vanishes at (1.50, 0.50)" in brief
+
+
+def test_perspective_horizon_maps_through_crop() -> None:
+    """A horizon falling from 0.25 to 0.75 across a crop of the right half.
+
+    The crop spans x 0.5 to 1 of the full image, so the line falls 1.0 per
+    unit of full width and crosses the full image's left border at -0.25.
+    """
+    result = PerspectiveResult(
+        families=(perspective_test_family((1024.0, 256.0)),),
+        unassigned=0,
+        shared_lines=(),
+        horizon=Horizon(left_y=0.25, right_y=0.75, assumption="a test"),
+        camera=NOTHING_WITHHELD,
+    )
+
+    brief = measure_perspective(result, 512, 512, CropRegion(0.5, 0.0, 1.0, 1.0)).brief
+
+    assert "left border at y -0.25 and the right border at y 0.75" in brief
+
+
+def test_perspective_text_gives_withheld_reason() -> None:
+    result = perspective_test_result(
+        (perspective_test_family((1024.0, 256.0)),),
+        camera=Withheld("families are not perpendicular"),
+    )
+
+    brief = measure_perspective(result, 512, 512).brief
+
+    assert "Camera estimate withheld: families are not perpendicular." in brief
+
+
+def test_perspective_camera_reports_how_well_its_pairs_agree() -> None:
+    """A disagreement of 3.2% is reported rounded up, as agreeing within 4%."""
+    camera = CameraEstimate(
+        field_of_view_degrees=60.0,
+        pitch_degrees=None,
+        roll_degrees=None,
+        pairs=3,
+        disagreement=0.032,
+        assumption="a test",
+    )
+    result = perspective_test_result((perspective_test_family((1024.0, 256.0)),), camera)
+
+    brief = measure_perspective(result, 512, 512).brief
+
+    assert (
+        "Camera estimate from 3 pairs of converging groups that agree within 4%: "
+        "field of view 60° across the width, assuming a test."
+    ) in brief
+
+
+def test_perspective_loose_fit_is_named() -> None:
+    """A median of 2 degrees is past half of the 3 degrees allowed to any edge."""
+    family = dataclasses.replace(perspective_test_family((1024.0, 256.0)), scatter_degrees=2.0)
+
+    brief = measure_perspective(perspective_test_result((family,)), 512, 512).brief
+
+    assert "8 edges, loose fit" in brief
+
+
+def test_perspective_full_lists_shared_lines() -> None:
+    """Three pieces on row 100 of a 512 frame, columns 0 to 260, plus five more rows."""
+    rows = [(100.0, 0.0, 50.0), (100.0, 80.0, 130.0), (100.0, 200.0, 260.0)]
+    rows += [(140.0, 100.0, 160.0), (180.0, 90.0, 170.0), (220.0, 120.0, 220.0)]
+    rows += [(260.0, 60.0, 170.0), (300.0, 200.0, 320.0)]
+    segments = np.array([[x0, y, x1, y] for y, x0, x1 in rows])
+    result = analyze_perspective(segments, 512, 512, cropped=False)
+
+    measurement = measure_perspective(result, 512, 512)
+
+    assert "(0.00,0.20)-(0.51,0.20) in 3 pieces, gaps along it at 0.19 to 0.31" in measurement.full
+    assert "pieces" not in measurement.brief
+
+
+def test_perspective_without_families_says_so() -> None:
+    measurement = measure_perspective(perspective_test_result(), 512, 512)
+
+    assert measurement.brief == (
+        "No group of straight edges converges or runs parallel; 0 straight edges unassigned."
+    )
 
 
 def test_edges_density_white_on_black() -> None:

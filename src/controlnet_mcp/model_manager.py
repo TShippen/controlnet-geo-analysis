@@ -78,9 +78,11 @@ class MissingCheckpointError(Exception):
 class ModelManager:
     """Builds detectors on demand and keeps at most ``max_loaded`` of them resident.
 
-    Processors that need no checkpoints are cheap to construct and are built on
-    every call rather than cached. All cache mutation is guarded by a reentrant
-    lock, because MCP tool calls run on worker threads.
+    Detectors are cached under the processor's detector key, so two analyses
+    that run the same detector share one resident model. Processors that need
+    no checkpoints are cheap to construct and are built on every call rather
+    than cached. All cache mutation is guarded by a reentrant lock, because MCP
+    tool calls run on worker threads.
     """
 
     def __init__(self, model_dir: Path, device: torch.device, max_loaded: int) -> None:
@@ -108,8 +110,8 @@ class ModelManager:
         return self._model_dir
 
     @property
-    def loaded_kinds(self) -> list[str]:
-        """Resident analysis kinds, least recently used first."""
+    def loaded_detectors(self) -> list[str]:
+        """Detector keys of the resident detectors, least recently used first."""
         with self._lock:
             return list(self._loaded)
 
@@ -128,9 +130,10 @@ class ModelManager:
         if not spec.requires_model:
             return spec.build(self._model_dir, self._device)
         with self._lock:
-            cached = self._loaded.get(spec.kind)
+            key = spec.detector_key
+            cached = self._loaded.get(key)
             if cached is not None:
-                self._loaded.move_to_end(spec.kind)
+                self._loaded.move_to_end(key)
                 return cached
             missing = missing_checkpoints(self._model_dir, spec.checkpoints)
             if missing:
@@ -138,33 +141,33 @@ class ModelManager:
             while len(self._loaded) >= self._max_loaded:
                 self._release(next(iter(self._loaded)))
             model = spec.build(self._model_dir, self._device)
-            self._loaded[spec.kind] = model
-            logger.info("Loaded %s detector on %s", spec.kind, self._device)
+            self._loaded[key] = model
+            logger.info("Loaded %s detector on %s", key, self._device)
             return model
 
-    def unload(self, kind: str) -> None:
-        """Release the detector cached for ``kind``, doing nothing when none is."""
+    def unload(self, detector_key: str) -> None:
+        """Release the detector cached under ``detector_key``, doing nothing when none is."""
         with self._lock:
-            if kind in self._loaded:
-                self._release(kind)
+            if detector_key in self._loaded:
+                self._release(detector_key)
 
     def unload_all(self) -> None:
         """Release every resident detector."""
         with self._lock:
-            for kind in list(self._loaded):
-                self._release(kind)
+            for detector_key in list(self._loaded):
+                self._release(detector_key)
 
-    def _release(self, kind: str) -> None:
+    def _release(self, detector_key: str) -> None:
         """Drop the cache's reference to a detector and reclaim its memory.
 
         The popped object is never bound to a name, so the cache entry was the
         last reference and the collector can free it before the caller loads a
         replacement.
         """
-        self._loaded.pop(kind)
+        self._loaded.pop(detector_key)
         gc.collect()
         if self._device.type == "cuda":
             torch.cuda.empty_cache()
         elif self._device.type == "mps":
             torch.mps.empty_cache()
-        logger.info("Unloaded %s detector from %s", kind, self._device)
+        logger.info("Unloaded %s detector from %s", detector_key, self._device)

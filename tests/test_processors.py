@@ -15,6 +15,7 @@ import torch
 from controlnet_aux import MLSDdetector
 from PIL import Image, ImageDraw
 
+from conftest import two_point_test_segments
 from controlnet_mcp.checkpoints import CheckpointSpec
 from controlnet_mcp.measurements import BEYOND_RANGE_MAX, EMPTY_MEASUREMENT
 from controlnet_mcp.processors import (
@@ -201,6 +202,43 @@ def test_lines_run_draws_and_measures_segments(monkeypatch: pytest.MonkeyPatch) 
     assert "2 straight edges" in output.measurement.brief
     assert np.array(output.image)[0, 0].tolist() == [255, 255, 255]
     assert np.array(output.image)[64, 64].tolist() == [0, 0, 0]
+
+
+def test_perspective_shares_the_lines_detector() -> None:
+    assert PROCESSORS["perspective"].detector_key == PROCESSORS["lines"].detector_key
+
+
+def test_perspective_run_colors_families(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two converging sets are two groups, the first drawn red and the second green."""
+    segments = two_point_test_segments()
+    monkeypatch.setattr("controlnet_mcp.processors.pred_lines", lambda *args: segments)
+
+    output = run_test_processor(
+        get_processor("perspective"),
+        MLSDdetector(object()),
+        structured_test_image((512, 512)),
+        512,
+    )
+
+    colors = {tuple(color) for color in np.array(output.image).reshape(-1, 3).tolist()}
+    assert (255, 0, 0) in colors
+    assert (0, 255, 0) in colors
+    assert "vanishes at" in output.measurement.brief
+
+
+def test_perspective_run_withholds_the_camera_for_a_crop(monkeypatch: pytest.MonkeyPatch) -> None:
+    segments = two_point_test_segments()
+    monkeypatch.setattr("controlnet_mcp.processors.pred_lines", lambda *args: segments)
+
+    output = run_test_processor(
+        get_processor("perspective"),
+        MLSDdetector(object()),
+        structured_test_image((512, 512)),
+        512,
+        region=CropRegion(0.5, 0.0, 1.0, 1.0),
+    )
+
+    assert "Camera estimate withheld: the image is a crop" in output.measurement.brief
 
 
 def test_lines_run_reports_nothing_when_no_segments_are_found(

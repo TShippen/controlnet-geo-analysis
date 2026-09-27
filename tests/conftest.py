@@ -3,6 +3,7 @@
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 from dotenv import dotenv_values
@@ -41,6 +42,53 @@ def write_test_image(
     image = Image.new(mode, size, color)
     image.save(path)
     return path
+
+
+PERSPECTIVE_TEST_FRAME = 512
+"""Side in pixels of the square frame the perspective test scenes are built in."""
+
+RIGHT_TEST_POINT = (948.8, 256.0)
+LEFT_TEST_POINT = (25.1, 256.0)
+"""Vanishing points of a camera with focal length 400 turned 30 degrees from a wall.
+
+With the optical center at (256, 256), the two perpendicular horizontal
+directions vanish at 256 + 400 * tan(60°) = 948.8 and 256 - 400 * tan(30°) = 25.1.
+"""
+
+PERSPECTIVE_TEST_ANCHORS = tuple(
+    (x, y) for y in (60.0, 440.0) for x in (300.0, 360.0, 420.0, 480.0)
+)
+"""Midpoints for converging test segments, well above and below the row of the test points."""
+
+
+def converging_test_segments(point: tuple[float, float]) -> np.ndarray:
+    """Eight segments centered on the test anchors, each lying on a line through ``point``.
+
+    Their lengths run 60, 68, and so on up to 116 pixels.
+    """
+    segments = []
+    for index, (x, y) in enumerate(PERSPECTIVE_TEST_ANCHORS):
+        toward = np.array([point[0] - x, point[1] - y])
+        half = (30.0 + 4.0 * index) * toward / np.linalg.norm(toward)
+        segments.append([x - half[0], y - half[1], x + half[0], y + half[1]])
+    return np.array(segments)
+
+
+def vertical_test_segments() -> np.ndarray:
+    """Eight exactly vertical segments 100 pixels long, at x 60, 120, and so on up to 480."""
+    return np.array([[x, 200.0, x, 300.0] for x in np.arange(60.0, 481.0, 60.0)])
+
+
+def two_point_test_segments() -> np.ndarray:
+    """Two sets of eight segments converging on the right and the left test points."""
+    return np.vstack(
+        [converging_test_segments(RIGHT_TEST_POINT), converging_test_segments(LEFT_TEST_POINT)]
+    )
+
+
+def camera_scene_test_segments() -> np.ndarray:
+    """The two-point scene plus verticals that stay parallel: a level camera, focal length 400."""
+    return np.vstack([two_point_test_segments(), vertical_test_segments()])
 
 
 def sampled_test_spec(kind: str, runs: list[int] | None = None) -> ProcessorSpec:

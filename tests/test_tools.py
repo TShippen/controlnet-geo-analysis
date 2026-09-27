@@ -123,10 +123,37 @@ async def test_lists_tools_with_schemas(client: Client) -> None:
         "normals",
         "lineart",
         "lines",
+        "perspective",
         "segments",
         "canny",
     }
     assert tools["analyze_image"].input_schema["required"] == ["filename", "analysis"]
+
+
+async def test_perspective_text_names_its_assumptions(client: Client) -> None:
+    description = await tool_description(client, "analyze_image")
+
+    assert "are assumptions" in description
+    assert "It gives no position, distance, or size." in description
+
+
+async def test_perspective_text_states_its_limits(client: Client) -> None:
+    """The description says how loosely edges are grouped and joined, and what a far point costs."""
+    description = await tool_description(client, "analyze_image")
+
+    assert "within 3 degrees of that group's vanishing point" in description
+    assert "within 2 pixels of the other's line" in description
+    assert "placed less precisely than a near one" in description
+
+
+async def test_line_length_on_perspective_is_error(client: Client) -> None:
+    result = await client.call_tool(
+        "analyze_image",
+        {"filename": "chair.png", "analysis": "perspective", "line_length": "long"},
+    )
+
+    assert result.is_error is True
+    assert "line_length" in result.content[0].text
 
 
 async def test_analyze_schema_has_box_and_point(client: Client) -> None:

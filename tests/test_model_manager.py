@@ -19,6 +19,12 @@ class FakeProcessorSpec:
     kind: str
     checkpoints: tuple[CheckpointSpec, ...]
     build: Callable[[Path, torch.device], object]
+    detector: str | None = None
+
+    @property
+    def detector_key(self) -> str:
+        """The name the detector is cached under."""
+        return self.detector or self.kind
 
     @property
     def requires_model(self) -> bool:
@@ -95,6 +101,23 @@ def test_get_builds_once_and_reuses(tmp_path: Path) -> None:
     assert spec.build.calls[0] == (tmp_path, torch.device("cpu"))
 
 
+def test_specs_sharing_a_detector_load_it_once(tmp_path: Path) -> None:
+    build = RecordingBuild()
+    checkpoint = write_test_checkpoint(tmp_path, "lines.pt")
+    lines = FakeProcessorSpec(kind="lines", checkpoints=(checkpoint,), build=build)
+    perspective = FakeProcessorSpec(
+        kind="perspective", checkpoints=(checkpoint,), build=build, detector="lines"
+    )
+    manager = ModelManager(tmp_path, torch.device("cpu"), max_loaded=1)
+
+    first = manager.get(lines)
+    second = manager.get(perspective)
+
+    assert first is second
+    assert len(build.calls) == 1
+    assert manager.loaded_detectors == ["lines"]
+
+
 def test_get_evicts_least_recently_used(tmp_path: Path) -> None:
     depth = make_spec(tmp_path, "depth")
     normals = make_spec(tmp_path, "normals")
@@ -103,7 +126,7 @@ def test_get_evicts_least_recently_used(tmp_path: Path) -> None:
     manager.get(depth)
     manager.get(normals)
 
-    assert manager.loaded_kinds == ["normals"]
+    assert manager.loaded_detectors == ["normals"]
 
 
 class FakeModel:
@@ -146,7 +169,7 @@ def test_get_respects_max_loaded_two(tmp_path: Path) -> None:
     manager.get(depth)
     manager.get(lineart)
 
-    assert manager.loaded_kinds == ["depth", "lineart"]
+    assert manager.loaded_detectors == ["depth", "lineart"]
 
 
 def test_missing_checkpoint_raises_with_command(tmp_path: Path) -> None:
@@ -174,7 +197,7 @@ def test_modelless_spec_not_cached(tmp_path: Path) -> None:
 
     assert first is not second
     assert len(spec.build.calls) == 2
-    assert manager.loaded_kinds == []
+    assert manager.loaded_detectors == []
 
 
 def test_unload_all_clears(tmp_path: Path) -> None:
@@ -186,7 +209,7 @@ def test_unload_all_clears(tmp_path: Path) -> None:
 
     manager.unload_all()
 
-    assert manager.loaded_kinds == []
+    assert manager.loaded_detectors == []
 
 
 def test_unload_missing_kind_is_noop(tmp_path: Path) -> None:
@@ -196,4 +219,4 @@ def test_unload_missing_kind_is_noop(tmp_path: Path) -> None:
 
     manager.unload("segments")
 
-    assert manager.loaded_kinds == ["depth"]
+    assert manager.loaded_detectors == ["depth"]

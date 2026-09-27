@@ -60,7 +60,7 @@ async def test_all_analyses_end_to_end(client: Client, manager: ModelManager) ->
         text, image = result.content
         assert isinstance(text, TextContent)
         assert isinstance(image, ImageContent)
-        assert len(manager.loaded_kinds) <= 1
+        assert len(manager.loaded_detectors) <= 1
         assert "%" in text.text or "straight edges" in text.text, kind
         assert "Ask for it" not in text.text, kind
 

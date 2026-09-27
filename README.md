@@ -18,10 +18,11 @@ analysis so repeated requests do not rerun inference.
 | `analyze_image(filename, analysis, resolution=None, box=None, point=None, exclude=None, extent=None, crop=None, line_length=None)` | One analysis image plus a one-line description. |
 | `sample_analysis(filename, analysis, points=None, line=None, count=None, resolution=None, crop=None)` | The values of a depth or normals analysis at chosen positions, as structured output. |
 
-`analysis` is one of `depth`, `normals`, `lineart`, `lines`, `segments`, or `canny`. The names
-are semantic on purpose: the backing model for any of them can change without changing the
-agent-facing interface, and the text an agent sees never names a model. The current backends
-are the controlnet-aux detectors Zoe, NormalBae, Lineart, MLSD, MobileSAM, and OpenCV Canny.
+`analysis` is one of `depth`, `normals`, `lineart`, `lines`, `perspective`, `segments`, or
+`canny`. The names are semantic on purpose: the backing model for any of them can change without
+changing the agent-facing interface, and the text an agent sees never names a model. The current
+backends are the controlnet-aux detectors Zoe, NormalBae, Lineart, MLSD, MobileSAM, and OpenCV
+Canny. `perspective` runs the same detector as `lines`, and the two share one loaded model.
 
 `segments` is prompted: the agent supplies a `box` (`[x0, y0, x1, y1]`) or a `point`
 (`[x, y]`) in fractions of the image size, and gets back the chosen region tinted and outlined
@@ -40,6 +41,21 @@ each crop is cached separately. A crop on `segments` is an error.
 `lines` takes `line_length`: `all`, the default, keeps every detected segment, and `long` keeps
 only those at least 6% of the image's longer side, which leaves the main edges for finding
 axes and perspective. Any other analysis rejects it.
+
+`perspective` groups the straight edges by the direction they run in the scene. The edges of a
+group meet at one vanishing point, which may lie outside the image, or run parallel when that
+point is too far away to tell from infinity. The image draws each group in its own color, and the
+text gives each group's vanishing point or parallel direction with its edge count. In the full
+form it also gives how tightly each group fits and which edges share one line. When one group
+runs close to the image vertical, the analysis takes it for the verticals of the scene and places
+the horizon. When at least two groups converge and their vanishing points are consistent with
+perpendicular directions, it estimates the field of view and the tilt of the camera. Each of
+those comes with the assumption behind it. When the evidence does not support one, the text says
+it is withheld and why: a cropped image has no known optical center, for example, so a crop never
+gets a camera estimate. The grouping is loose by design: an edge joins a group when it points
+within 3 degrees of that group's vanishing point, and edges count as sharing a line when they lie
+within 2 pixels of each other's line, so a group can hold a few edges from another direction and
+closely spaced parallel edges can be chained together. The tool description says so.
 
 `sample_analysis` reads numbers off a `depth` or `normals` map. The agent gives either `points`
 or a `line` with an optional `count` of samples, all in fractions of the full image. The values
@@ -165,6 +181,7 @@ The slow tests skip themselves when checkpoints are absent from the `MODEL_DIR` 
 
 ## Out of scope for this version
 
-Alternative depth and normal estimators, pose detection, vectorized output, camera calibration,
-and multi-view reconstruction. The semantic tool interface is designed so those can be swapped
-in later without changing how an agent calls the server.
+Alternative depth and normal estimators, pose detection, vectorized output, camera position and
+scale, and multi-view reconstruction. The camera estimate that `perspective` gives comes from the
+vanishing points of a single image. The semantic tool interface is designed so those can be
+swapped in later without changing how an agent calls the server.
