@@ -48,7 +48,9 @@ crop, so a cached render is reused and the numbers match the image the agent saw
 the median of a small window around its position and comes with the spread inside that window. A
 large spread flags the sample as sitting on a boundary between surfaces. Along a line, the result
 also lists each place the value changes between two consecutive samples, which brackets a
-boundary to within the sample spacing. Depth values are levels that order surfaces within one
+boundary to within the sample spacing. A depth map changes gradually across a step between
+surfaces, so the boundary flag catches only sharp steps there, and a line across the step is the
+way to find it. Depth values are levels that order surfaces within one
 render; they are not distances. Normal values are directions relative to the camera, so the same
 face reads differently from another viewpoint. Sky and open background get values in both maps,
 usually steady ones, so a steady reading does not mean a surface is there. Any other analysis is

@@ -451,7 +451,10 @@ PROCESSORS: dict[str, ProcessorSpec] = {
             "A level from 0 to 255, higher is closer. Levels order surfaces within one image "
             "and one crop. Differences between levels are not distances, ratios of levels mean "
             "nothing, and levels from another crop, resolution, or image are not comparable. A "
-            "sample beyond the depth range has no level. Sky and open background usually still "
+            "sample beyond the depth range has no level. Levels change gradually across a step "
+            "between two surfaces, over several pixels, so a single sample there is rarely "
+            "flagged as on a boundary; to find a step, sample along a line across it and read "
+            "the changes. Sky and open background usually still "
             "get a level, with a small spread, so a steady reading does not show that a surface "
             "is there; check the position against the original image."
         ),

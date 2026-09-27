@@ -456,6 +456,19 @@ async def test_sample_description_states_what_values_are_not(client: Client) -> 
     assert "relative to this camera" in description
 
 
+async def test_sample_description_says_depth_steps_are_gradual(client: Client) -> None:
+    description = await tool_description(client, "sample_analysis")
+
+    assert "change gradually across a step" in description
+
+
+async def test_sample_schema_says_unflagged_is_not_one_surface(client: Client) -> None:
+    tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    sample = tools["sample_analysis"].output_schema["$defs"]["Sample"]
+    assert "False does not show" in sample["properties"]["on_boundary"]["description"]
+
+
 async def test_sample_description_warns_that_sky_reads_like_a_surface() -> None:
     """Each sampled analysis says so itself, since each gives sky a steady value."""
     for kind in SAMPLED_KINDS:

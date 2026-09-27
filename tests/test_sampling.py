@@ -134,6 +134,33 @@ def test_gentle_ramp_reports_no_change() -> None:
     assert changes == []
 
 
+def gradual_step_test_levels() -> np.ndarray:
+    """Level 100 rising to 156 by 7 levels a column over columns 124 to 131 of 256."""
+    levels = np.full((64, 256), 100)
+    levels[:, 124:132] = 100 + 7 * np.arange(1, 9)
+    levels[:, 132:] = 156
+    return levels
+
+
+def test_sample_on_gradual_step_is_not_flagged() -> None:
+    """Pixel 128 has a window over columns 126 to 130: levels 121 to 149, a spread of 28."""
+    value_map = depth_test_map(gradual_step_test_levels())
+
+    (sample,) = sample_points(value_map, [(0.5, 0.5)], FULL_IMAGE)
+
+    assert sample.spread == 28
+    assert sample.on_boundary is False
+
+
+def test_line_across_gradual_step_reports_the_change() -> None:
+    """Sample 15 is column 123, before the rise, and sample 16 is column 132, after it."""
+    value_map = depth_test_map(gradual_step_test_levels())
+
+    _, changes = sample_line(value_map, (0.0, 0.5), (1.0, 0.5), 32, FULL_IMAGE)
+
+    assert [(change.after_sample, change.size) for change in changes] == [(15, 56)]
+
+
 def test_change_into_beyond_range_has_no_size() -> None:
     value_map = depth_test_map(halves_test_levels(150, 0))
 

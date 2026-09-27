@@ -21,7 +21,9 @@ from controlnet_mcp.regions import CropRegion
 # smallest that straddles a one-pixel boundary from either side.
 WINDOW_RADIUS = 2
 # Depth levels. An eighth of the 0 to 255 level range within one 5-pixel window
-# is more than a single receding surface produces.
+# is more than a single receding surface produces. An estimated depth map rises
+# gradually across a step, by a few levels per pixel, so this flags only a step
+# sharper than that; a gradual step shows as a change between line samples.
 BOUNDARY_LEVELS = 32
 # Degrees. A face counted as flat changes by under 0.05 in its unit normal per
 # pixel, about 3 degrees, so about 12 degrees across the 4 steps of a window; 20
@@ -86,7 +88,9 @@ class Sample(BaseModel):
     on_boundary: bool = Field(
         description=(
             "True when the spread is too large for one surface, so the sample sits between "
-            "surfaces and a nearby position would read differently."
+            "surfaces and a nearby position would read differently. False does not show that "
+            "the sample is on one surface: a step that changes gradually over several pixels "
+            "is not flagged."
         )
     )
     beyond_range: bool = Field(
