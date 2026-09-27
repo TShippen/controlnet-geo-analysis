@@ -81,5 +81,13 @@ class CropRegion:
         """Map a point given as fractions of this region to fractions of the full image."""
         return self.x0 + x * (self.x1 - self.x0), self.y0 + y * (self.y1 - self.y0)
 
+    def to_local(self, x: float, y: float) -> tuple[float, float]:
+        """Map a point given as fractions of the full image to fractions of this region."""
+        return (x - self.x0) / (self.x1 - self.x0), (y - self.y0) / (self.y1 - self.y0)
+
+    def contains(self, x: float, y: float) -> bool:
+        """Whether a point in fractions of the full image lies in the region, edges included."""
+        return self.x0 <= x <= self.x1 and self.y0 <= y <= self.y1
+
 
 FULL_IMAGE = CropRegion(0.0, 0.0, 1.0, 1.0)

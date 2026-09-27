@@ -11,7 +11,7 @@ from mcp import Client
 from mcp.types import ImageContent, TextContent
 from PIL import Image
 
-from conftest import SAMPLE_MEASUREMENT, write_test_image
+from conftest import SAMPLE_MEASUREMENT, sampled_test_spec, write_test_image
 from controlnet_mcp.analysis import AnalysisService
 from controlnet_mcp.cache import AnalysisCache
 from controlnet_mcp.checkpoints import PREPARE_COMMAND
@@ -102,10 +102,15 @@ def fake_segments_spec() -> ProcessorSpec:
     )
 
 
-async def test_lists_three_tools_with_schemas(client: Client) -> None:
+async def test_lists_tools_with_schemas(client: Client) -> None:
     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    assert set(tools) == {"list_reference_images", "get_reference_image", "analyze_image"}
+    assert set(tools) == {
+        "list_reference_images",
+        "get_reference_image",
+        "analyze_image",
+        "sample_analysis",
+    }
     analysis_schema = tools["analyze_image"].input_schema["properties"]["analysis"]
     assert set(analysis_schema["enum"]) == {
         "depth",
@@ -421,6 +426,58 @@ async def test_description_mentions_measurements_only_when_on(settings: Settings
 
     assert "measurements" not in off
     assert "measurements" in brief
+
+
+async def test_sample_analysis_returns_structured_samples(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fake map holds level 50 on its left half, so x 0.25 reads 50."""
+    monkeypatch.setitem(PROCESSORS, "depth", sampled_test_spec("depth"))
+
+    result = await client.call_tool(
+        "sample_analysis",
+        {"filename": "chair.png", "analysis": "depth", "points": [[0.25, 0.5]]},
+    )
+
+    assert result.is_error is not True
+    assert result.structured_content["samples"][0]["value"] == [50]
+
+
+async def test_sample_description_states_what_values_are_not(client: Client) -> None:
+    description = await tool_description(client, "sample_analysis")
+
+    assert "not distances" in description
+    assert "relative to this camera" in description
+
+
+async def test_sample_analysis_schema_lists_sampled_analyses(client: Client) -> None:
+    tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    analysis_schema = tools["sample_analysis"].input_schema["properties"]["analysis"]
+    assert analysis_schema["enum"] == ["depth", "normals"]
+
+
+async def test_sample_on_canny_is_error(client: Client) -> None:
+    result = await client.call_tool(
+        "sample_analysis",
+        {"filename": "chair.png", "analysis": "canny", "points": [[0.5, 0.5]]},
+    )
+
+    assert result.is_error is True
+
+
+async def test_sample_with_malformed_point_is_error(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PROCESSORS, "depth", sampled_test_spec("depth"))
+
+    result = await client.call_tool(
+        "sample_analysis",
+        {"filename": "chair.png", "analysis": "depth", "points": [[0.5, 1.5]]},
+    )
+
+    assert result.is_error is True
+    assert "between 0 and 1" in result.content[0].text
 
 
 async def test_analyze_unknown_kind_is_error(client: Client) -> None:

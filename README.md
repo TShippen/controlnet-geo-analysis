@@ -16,6 +16,7 @@ analysis so repeated requests do not rerun inference.
 | `list_reference_images` | Names, dimensions, and formats of the images in the reference directory. |
 | `get_reference_image(filename)` | The original image as MCP image content. |
 | `analyze_image(filename, analysis, resolution=None, box=None, point=None, exclude=None, extent=None, crop=None, line_length=None)` | One analysis image plus a one-line description. |
+| `sample_analysis(filename, analysis, points=None, line=None, count=None, resolution=None, crop=None)` | The values of a depth or normals analysis at chosen positions, as structured output. |
 
 `analysis` is one of `depth`, `normals`, `lineart`, `lines`, `segments`, or `canny`. The names
 are semantic on purpose: the backing model for any of them can change without changing the
@@ -39,6 +40,17 @@ each crop is cached separately. A crop on `segments` is an error.
 `lines` takes `line_length`: `all`, the default, keeps every detected segment, and `long` keeps
 only those at least 6% of the image's longer side, which leaves the main edges for finding
 axes and perspective. Any other analysis rejects it.
+
+`sample_analysis` reads numbers off a `depth` or `normals` map. The agent gives either `points`
+or a `line` with an optional `count` of samples, all in fractions of the full image. The values
+are decoded from the same rendered map `analyze_image` returns for that filename, resolution, and
+crop, so a cached render is reused and the numbers match the image the agent saw. Each sample is
+the median of a small window around its position and comes with the spread inside that window. A
+large spread flags the sample as sitting on a boundary between surfaces. Along a line, the result
+also lists each place the value changes between two consecutive samples, which brackets a
+boundary to within the sample spacing. Depth values are levels that order surfaces within one
+render; they are not distances. Normal values are directions relative to the camera, so the same
+face reads differently from another viewpoint. Any other analysis is rejected.
 
 Every analysis measures its own output. A short and a long form of that measurement are stored
 with the cached image, and `RESULT_MEASUREMENTS` in `.env` decides which one the agent sees.

@@ -21,6 +21,7 @@ from controlnet_mcp.processors import (
     ANALYSIS_KINDS,
     DEFAULT_OPTIONS,
     PROCESSORS,
+    SAMPLED_KINDS,
     AnalysisOptions,
     AnalysisOutput,
     ProcessorSpec,
@@ -172,6 +173,21 @@ def test_segments_version_is_two() -> None:
 def test_lineart_version_is_two() -> None:
     """The bump retires cached PNGs whose stored measurement has the inverted polarity."""
     assert PROCESSORS["lineart"].version == "2"
+
+
+def test_normals_version_is_two() -> None:
+    """The bump retires cached PNGs whose stored measurement names no face direction."""
+    assert PROCESSORS["normals"].version == "2"
+
+
+def test_sampled_kinds_are_depth_and_normals() -> None:
+    assert SAMPLED_KINDS == ("depth", "normals")
+
+
+def test_every_sampled_analysis_describes_its_values() -> None:
+    sampled = [spec for spec in PROCESSORS.values() if spec.read_values is not None]
+
+    assert all(spec.values_description for spec in sampled)
 
 
 def test_lines_run_draws_and_measures_segments(monkeypatch: pytest.MonkeyPatch) -> None:

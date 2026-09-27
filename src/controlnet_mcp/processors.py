@@ -38,6 +38,7 @@ from controlnet_mcp.checkpoints import (
     checkpoint_path,
 )
 from controlnet_mcp.measurements import (
+    BEYOND_RANGE_MAX,
     EMPTY_MEASUREMENT,
     Measurement,
     measure_depth,
@@ -47,6 +48,7 @@ from controlnet_mcp.measurements import (
     measure_normals,
 )
 from controlnet_mcp.regions import CropRegion
+from controlnet_mcp.sampling import ValueMap
 from controlnet_mcp.segmentation import (
     PromptedSegmenter,
     PromptError,
@@ -60,6 +62,8 @@ logger = logging.getLogger(__name__)
 AnalysisKind = Literal["depth", "normals", "lineart", "lines", "segments", "canny"]
 
 ANALYSIS_KINDS: tuple[str, ...] = ("depth", "normals", "lineart", "lines", "segments", "canny")
+
+SampledKind = Literal["depth", "normals"]
 
 ANNOTATOR_SUBDIR = "annotators"
 
@@ -142,6 +146,12 @@ class ProcessorSpec:
             The stored measurement is part of that output, because a cache hit
             serves the text saved with the PNG rather than measuring again, so
             a change to what the measurement reports needs a bump too.
+        read_values: Decodes the rendered RGB array into the values it
+            encodes, for analyses whose output can be sampled at a position.
+            None for the others.
+        values_description: What the sampled values of this analysis are and
+            are not. Part of the sampling tool's description, so it never
+            names a model. Set whenever ``read_values`` is.
     """
 
     kind: str
@@ -156,6 +166,8 @@ class ProcessorSpec:
     accepts_prompt: bool = False
     accepts_line_length: bool = False
     version: str = "1"
+    read_values: Callable[[np.ndarray], ValueMap] | None = None
+    values_description: str = ""
 
     @property
     def requires_model(self) -> bool:
@@ -254,14 +266,39 @@ def _run_normals(
     region: CropRegion,
     options: AnalysisOptions,
 ) -> AnalysisOutput:
-    """Run the normal detector and measure the flat and curved areas of the map.
-
-    The measurement reports only shares of the map, so the region is unused.
-    """
-    del prompt, region, options
+    """Run the normal detector and measure the flat faces and curved area of the map."""
+    del prompt, options
     rendered = _render_whole_image(detector, image, resolution)
     pixels = np.array(rendered, dtype=np.uint8)
-    return AnalysisOutput(image=rendered, measurement=measure_normals(pixels))
+    return AnalysisOutput(image=rendered, measurement=measure_normals(pixels, region))
+
+
+def read_depth_values(rgb: np.ndarray) -> ValueMap:
+    """Decode a rendered depth map into levels.
+
+    The level is the gray value, 0 to 255, where higher is closer. A pixel at
+    or below ``BEYOND_RANGE_MAX`` lies beyond the depth range and has no level.
+    """
+    levels = rgb.astype(np.float32).mean(axis=2)
+    return ValueMap(
+        values=levels[:, :, np.newaxis], beyond_range=levels <= BEYOND_RANGE_MAX, vector=False
+    )
+
+
+def read_normal_values(rgb: np.ndarray) -> ValueMap:
+    """Decode a rendered normal map into unit directions in camera axes.
+
+    The components are right, up, and toward the camera. Red is high for a
+    face turned to the image left, so the right component is the negated
+    decoded red. Every pixel of a normal map carries a direction.
+    """
+    decoded = rgb.astype(np.float32) / 255.0 * 2.0 - 1.0
+    directions = decoded * np.array([-1.0, 1.0, 1.0], dtype=np.float32)
+    lengths = np.linalg.norm(directions, axis=2, keepdims=True)
+    directions = directions / np.maximum(lengths, np.finfo(np.float32).eps)
+    return ValueMap(
+        values=directions, beyond_range=np.zeros(rgb.shape[:2], dtype=bool), vector=True
+    )
 
 
 def _run_lineart(
@@ -409,6 +446,13 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         build=_build_depth,
         run=_run_depth,
         version="2",
+        read_values=read_depth_values,
+        values_description=(
+            "A level from 0 to 255, higher is closer. Levels order surfaces within one image "
+            "and one crop. Differences between levels are not distances, ratios of levels mean "
+            "nothing, and levels from another crop, resolution, or image are not comparable. A "
+            "sample beyond the depth range has no level."
+        ),
     ),
     "normals": ProcessorSpec(
         kind="normals",
@@ -427,6 +471,14 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         checkpoints=(NORMALBAE_CHECKPOINT,),
         build=_build_normals,
         run=_run_normals,
+        version="2",
+        read_values=read_normal_values,
+        values_description=(
+            "The direction a surface faces, as the components [right, up, toward the camera] "
+            "of a unit vector. The direction is relative to this camera view, not to the world: "
+            "a tilted camera tilts every value, and the same face reads differently in another "
+            "view."
+        ),
     ),
     "lineart": ProcessorSpec(
         kind="lineart",
@@ -499,6 +551,11 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         run=_run_canny,
     ),
 }
+
+
+SAMPLED_KINDS: tuple[str, ...] = tuple(
+    kind for kind, spec in PROCESSORS.items() if spec.read_values is not None
+)
 
 
 def get_processor(kind: str) -> ProcessorSpec:

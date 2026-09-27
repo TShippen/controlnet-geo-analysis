@@ -11,7 +11,7 @@ import pytest
 import torch
 from PIL import Image
 
-from conftest import SAMPLE_MEASUREMENT, write_test_image
+from conftest import SAMPLE_MEASUREMENT, sampled_test_spec, write_test_image
 from controlnet_mcp.analysis import AnalysisService, ResolutionError
 from controlnet_mcp.cache import AnalysisCache
 from controlnet_mcp.checkpoints import ZOE_CHECKPOINT, CheckpointSpec
@@ -28,6 +28,7 @@ from controlnet_mcp.processors import (
     UnknownAnalysisError,
 )
 from controlnet_mcp.regions import FULL_IMAGE, CropError, CropRegion
+from controlnet_mcp.sampling import SamplingError
 from controlnet_mcp.segmentation import PromptError, RegionPrompt
 
 DISTINCT_FORMS = Measurement(brief="B", full="F")
@@ -436,6 +437,86 @@ def test_unreadable_cache_file_is_rendered_again(service: AnalysisService, refer
     assert result.from_cache is False
     assert result.png == first.png
     assert cache_path.read_bytes() == first.png
+
+
+def test_sample_reads_the_rendered_map(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fake map holds level 50 on its left half, so x 0.25 reads 50."""
+    monkeypatch.setitem(PROCESSORS, "fake", sampled_test_spec("fake"))
+
+    report = service.sample(reference, "fake", [(0.25, 0.5)], None, None, 64)
+
+    assert report.analysis == "fake"
+    assert [sample.value for sample in report.samples] == [[50]]
+
+
+def test_sample_line_uses_the_default_count(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 32 default samples cross the one step of the fake map, from 50 up to 200."""
+    monkeypatch.setitem(PROCESSORS, "fake", sampled_test_spec("fake"))
+
+    report = service.sample(reference, "fake", None, (0.0, 0.5, 1.0, 0.5), None, 64)
+
+    assert len(report.samples) == 32
+    assert [change.size for change in report.changes] == [150]
+
+
+def test_sample_maps_positions_through_the_crop(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """In a crop of the right half, x 0.6 is 0.2 across the fake map, on its level 50 half."""
+    monkeypatch.setitem(PROCESSORS, "fake", sampled_test_spec("fake"))
+    crop = CropRegion.from_list([0.5, 0.0, 1.0, 1.0])
+
+    report = service.sample(reference, "fake", [(0.6, 0.5)], None, None, 64, crop)
+
+    assert [sample.value for sample in report.samples] == [[50]]
+
+
+def test_sample_serves_cached_render(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs: list[int] = []
+    monkeypatch.setitem(PROCESSORS, "fake", sampled_test_spec("fake", runs))
+
+    service.sample(reference, "fake", [(0.25, 0.5)], None, None, 64)
+    service.sample(reference, "fake", [(0.75, 0.5)], None, None, 64)
+
+    assert runs == [64]
+
+
+def test_sample_rejects_analysis_without_values(service: AnalysisService, reference: str) -> None:
+    with pytest.raises(SamplingError, match="depth, normals"):
+        service.sample(reference, "canny", [(0.5, 0.5)], None, None, 64)
+
+
+def test_sample_rejects_points_together_with_line(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PROCESSORS, "fake", sampled_test_spec("fake"))
+
+    with pytest.raises(SamplingError, match="exactly one"):
+        service.sample(reference, "fake", [(0.5, 0.5)], (0.0, 0.5, 1.0, 0.5), None, 64)
+
+
+def test_sample_rejects_neither_points_nor_line(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PROCESSORS, "fake", sampled_test_spec("fake"))
+
+    with pytest.raises(SamplingError, match="exactly one"):
+        service.sample(reference, "fake", None, None, None, 64)
+
+
+def test_sample_rejects_count_with_points(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(PROCESSORS, "fake", sampled_test_spec("fake"))
+
+    with pytest.raises(SamplingError, match="count"):
+        service.sample(reference, "fake", [(0.5, 0.5)], None, 8, 64)
 
 
 class StatefulDetector:

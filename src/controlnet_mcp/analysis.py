@@ -4,9 +4,14 @@ This module contains no MCP transport logic; the server module translates its
 exceptions into tool errors.
 """
 
+import io
 import logging
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass
+
+import numpy as np
+from PIL import Image
 
 from controlnet_mcp.cache import AnalysisCache, image_digest
 from controlnet_mcp.config import MAX_RESOLUTION, MIN_RESOLUTION, Settings
@@ -27,6 +32,13 @@ from controlnet_mcp.processors import (
     get_processor,
 )
 from controlnet_mcp.regions import FULL_IMAGE, CropError, CropRegion
+from controlnet_mcp.sampling import (
+    DEFAULT_LINE_SAMPLES,
+    SampleReport,
+    SamplingError,
+    sample_line,
+    sample_points,
+)
 from controlnet_mcp.segmentation import PromptError, RegionPrompt
 
 logger = logging.getLogger(__name__)
@@ -183,6 +195,69 @@ class AnalysisService:
             description=f"{spec.description} Detection resolution {resolution}.",
             measurement=self._selected_form(output.measurement),
             crop=snapped,
+        )
+
+    def sample(
+        self,
+        filename: str,
+        kind: str,
+        points: Sequence[tuple[float, float]] | None,
+        line: tuple[float, float, float, float] | None,
+        count: int | None,
+        resolution: int | None = None,
+        crop: CropRegion | None = None,
+    ) -> SampleReport:
+        """Read values off the ``kind`` analysis of a reference image at chosen positions.
+
+        The values are decoded from the same rendered map ``analyze`` returns
+        for these arguments, so a cached render is reused and the numbers
+        describe exactly the image the caller was shown.
+
+        Args:
+            filename: Bare file name inside the reference image directory.
+            kind: An analysis whose output can be sampled.
+            points: Positions to read, as fractions of the full image.
+            line: Two ends ``x0, y0, x1, y1`` to read evenly between, in the
+                same coordinates. Exactly one of ``points`` and ``line`` is given.
+            count: How many samples a line takes; ``None`` uses the default.
+                Rejected with ``points``.
+            resolution: Detection resolution; ``None`` uses the configured default.
+            crop: Part of the image the analysis is rendered from.
+
+        Raises:
+            SamplingError: When ``kind`` cannot be sampled, the positions are
+                not exactly one of points or a line, ``count`` is misused, or a
+                position lies outside the crop.
+            UnknownAnalysisError: When ``kind`` is not registered.
+        """
+        spec = get_processor(kind)
+        if spec.read_values is None:
+            sampled = ", ".join(name for name, entry in PROCESSORS.items() if entry.read_values)
+            raise SamplingError(
+                f"The {spec.kind} analysis has no values to sample; sampling applies only to "
+                f"{sampled}."
+            )
+        if (points is None) == (line is None):
+            raise SamplingError("Give exactly one of points or line.")
+        if points is not None and count is not None:
+            raise SamplingError("count applies only to a line; points are read as given.")
+        result = self.analyze(filename, kind, resolution, crop=crop)
+        with Image.open(io.BytesIO(result.png)) as rendered:
+            pixels = np.array(rendered.convert("RGB"), dtype=np.uint8)
+        value_map = spec.read_values(pixels)
+        region = result.crop if result.crop is not None else FULL_IMAGE
+        if line is not None:
+            samples, changes = sample_line(
+                value_map,
+                (line[0], line[1]),
+                (line[2], line[3]),
+                count if count is not None else DEFAULT_LINE_SAMPLES,
+                region,
+            )
+            return SampleReport(analysis=spec.kind, samples=samples, changes=changes)
+        assert points is not None
+        return SampleReport(
+            analysis=spec.kind, samples=sample_points(value_map, points, region), changes=[]
         )
 
     def _selected_form(self, measurement: Measurement) -> str:

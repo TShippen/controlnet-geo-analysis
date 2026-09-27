@@ -22,13 +22,25 @@ from controlnet_mcp.images import ReferenceImageError, ReferenceImageInfo
 from controlnet_mcp.model_manager import MissingCheckpointError
 from controlnet_mcp.processors import (
     PROCESSORS,
+    SAMPLED_KINDS,
     AnalysisKind,
     AnalysisOptions,
     LineLength,
     OptionError,
+    SampledKind,
     UnknownAnalysisError,
 )
 from controlnet_mcp.regions import CropError, CropRegion
+from controlnet_mcp.sampling import (
+    DEFAULT_LINE_SAMPLES,
+    MAX_LINE_SAMPLES,
+    MAX_POINTS,
+    MIN_LINE_SAMPLES,
+    SampleReport,
+    SamplingError,
+    parse_line,
+    parse_points,
+)
 from controlnet_mcp.segmentation import Extent, PromptError, RegionPrompt
 
 logger = logging.getLogger(__name__)
@@ -41,8 +53,10 @@ SERVER_INSTRUCTIONS = (
     "ask analyze_image for the one analysis your current step needs. A usual order: lines for "
     "axes and perspective on objects with straight parts, segments to split the object into "
     "parts, lineart to trace profiles, normals to choose flat or curved surfaces for each part, "
-    "depth to order parts front to back, and canny last for a missing detail. No analysis gives "
-    "absolute size; get one known dimension from the user or the image."
+    "depth to order parts front to back, and canny last for a missing detail. Once a depth or "
+    "normals analysis shows where to look, read its values at those positions with "
+    "sample_analysis. No analysis gives absolute size; get one known dimension from the user or "
+    "the image."
 )
 
 _EXPECTED_ERRORS = (
@@ -52,20 +66,22 @@ _EXPECTED_ERRORS = (
     PromptError,
     CropError,
     OptionError,
+    SamplingError,
     MissingCheckpointError,
 )
 
 
 def build_server(service: AnalysisService) -> MCPServer:
-    """Create the MCP server with its three tools bound to ``service``.
+    """Create the MCP server with its tools bound to ``service``.
 
     The measurement setting is read off the service, which selects the form of
     every measurement it reports, so the tool description and the result text
     describe the same service.
 
     Args:
-        service: The analysis service backing ``analyze_image``, and the
-            source of the configuration every tool reads.
+        service: The analysis service backing ``analyze_image`` and
+            ``sample_analysis``, and the source of the configuration every
+            tool reads.
     """
     measurement_mode = service.settings.result_measurements
     mcp = MCPServer(SERVER_NAME, instructions=SERVER_INSTRUCTIONS)
@@ -181,6 +197,72 @@ def build_server(service: AnalysisService) -> MCPServer:
         text = _result_text(result, filename, measurement_mode)
         return [text, Image(data=result.png, format="png")]
 
+    @mcp.tool(annotations=read_only, description=_sample_analysis_description())
+    def sample_analysis(
+        filename: Annotated[str, Field(description="A name from list_reference_images.")],
+        analysis: Annotated[SampledKind, Field(description="Which analysis to read values from.")],
+        points: Annotated[
+            list[list[float]] | None,
+            Field(
+                description=(
+                    f"Positions to read: [[x, y], ...] as fractions of the full image width and "
+                    f"height, origin top-left, at most {MAX_POINTS}. Give points or line, not both."
+                )
+            ),
+        ] = None,
+        line: Annotated[
+            list[float] | None,
+            Field(
+                description=(
+                    "A line to read evenly along, both ends included: [x0, y0, x1, y1] as "
+                    "fractions of the full image width and height, origin top-left."
+                )
+            ),
+        ] = None,
+        count: Annotated[
+            int | None,
+            Field(
+                description=(
+                    f"For line only: how many samples to take, {MIN_LINE_SAMPLES} to "
+                    f"{MAX_LINE_SAMPLES}. Leave unset for {DEFAULT_LINE_SAMPLES}."
+                )
+            ),
+        ] = None,
+        resolution: Annotated[
+            int | None,
+            Field(
+                description=(
+                    "Working resolution of the analysis that is read, 64 to 2048. Leave unset "
+                    "for the default. Use the value you gave analyze_image to read the same map."
+                )
+            ),
+        ] = None,
+        crop: Annotated[
+            list[float] | None,
+            Field(
+                description=(
+                    "Read the analysis of this part of the image: [x0, y0, x1, y1] as fractions "
+                    "of width and height, origin top-left, top-left corner first. Use the crop "
+                    "you gave analyze_image to read the same map. Positions stay fractions of "
+                    "the full image and must lie inside the crop."
+                )
+            ),
+        ] = None,
+    ) -> SampleReport:
+        """Read values off one analysis at chosen positions.
+
+        The agent-facing description comes from ``_sample_analysis_description``,
+        generated from the processor registry so each analysis explains its
+        own values in one place.
+        """
+        try:
+            positions = parse_points(points) if points is not None else None
+            ends = parse_line(line) if line is not None else None
+            region = CropRegion.from_list(crop) if crop is not None else None
+            return service.sample(filename, analysis, positions, ends, count, resolution, region)
+        except _EXPECTED_ERRORS as exc:
+            raise ToolError(str(exc)) from exc
+
     return mcp
 
 
@@ -206,6 +288,28 @@ def _analyze_image_description(mode: MeasurementSetting) -> str:
     if mode == "off":
         return description
     return f"{description}\nEach result's text reports measurements taken from that output."
+
+
+def _sample_analysis_description() -> str:
+    """The agent-facing description of ``sample_analysis``.
+
+    What the values of each analysis are, and are not, comes from the
+    processor registry. The sentences on reading a sample hold for every
+    sampled analysis and live here.
+    """
+    return (
+        "Read the values of a depth or normals analysis at chosen positions, or evenly along "
+        "a line. The values come from the same image analyze_image returns for the same "
+        "filename, resolution, and crop, so look at that image first to choose positions. "
+        "What the values are:\n"
+        + "\n".join(f"- {kind}: {PROCESSORS[kind].values_description}" for kind in SAMPLED_KINDS)
+        + "\nEach sample is the median of a small window and reports the spread inside that "
+        "window. A large spread means the sample sits between surfaces and a nearby position "
+        "would read differently, so sample again beside it. Along a line, each change brackets "
+        "a boundary to within the sample spacing and does not locate it more finely. Deciding "
+        "which surface a sample belongs to, and what a value means for the object, is up to "
+        "you."
+    )
 
 
 def _result_text(result: AnalysisResult, filename: str, mode: MeasurementSetting) -> str:

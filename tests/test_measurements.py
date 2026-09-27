@@ -14,6 +14,9 @@ from controlnet_mcp.measurements import (
 )
 from controlnet_mcp.regions import CropRegion
 
+FACING_CAMERA = (128, 128, 255)
+TURNED_LEFT = (218, 128, 218)
+
 
 def test_depth_shares() -> None:
     """Near 200, 255, 255; mid 100; far 50; black 0: three, one, one, and one of six."""
@@ -67,28 +70,76 @@ def test_depth_all_far() -> None:
 
 
 def test_normals_solid_is_all_flat() -> None:
-    rgb = np.full((4, 4, 3), 128, dtype=np.uint8)
+    rgb = np.full((4, 4, 3), FACING_CAMERA, dtype=np.uint8)
 
     measurement = measure_normals(rgb)
 
     assert "flat 100%" in measurement.brief
     assert "curved 0%" in measurement.brief
     assert "largest flat face 100%" in measurement.brief
-    assert "1 flat orientation covers" in measurement.full
+    assert measurement.full.count("bounding box") == 1
 
 
 def test_normals_two_faces() -> None:
     rgb = np.zeros((4, 4, 3), dtype=np.uint8)
-    rgb[:, :2] = (200, 100, 100)
-    rgb[:, 2:] = (60, 180, 90)
+    rgb[:, :2] = FACING_CAMERA
+    rgb[:, 2:] = TURNED_LEFT
 
     measurement = measure_normals(rgb)
 
-    # The seam column differs from its right neighbour, so 4 of 16 pixels are curved.
+    # The seam column differs from its right neighbour, so 4 of 16 pixels are curved,
+    # which leaves the left face one column of 4 pixels and the right face two columns.
     assert "flat 75%" in measurement.brief
     assert "curved 25%" in measurement.brief
     assert "largest flat face 50%" in measurement.brief
-    assert "2 flat orientations cover" in measurement.full
+    assert "50% turned 45° left" in measurement.full
+    assert "25% facing the camera" in measurement.full
+
+
+def test_normals_brief_names_largest_face_direction() -> None:
+    """Red 218 and blue 218 decode to equal parts left and toward the camera: 45 degrees."""
+    rgb = np.full((8, 8, 3), TURNED_LEFT, dtype=np.uint8)
+
+    assert "turned 45° left" in measure_normals(rgb).brief
+
+
+def test_normals_facing_camera_is_named() -> None:
+    rgb = np.full((8, 8, 3), FACING_CAMERA, dtype=np.uint8)
+
+    assert "facing the camera" in measure_normals(rgb).brief
+
+
+def test_normals_direction_combines_turn_and_tilt() -> None:
+    """Decoded (-0.5, 0.17, 0.85): right 0.5 over toward 0.85 is 30 degrees, up 0.17 is 10."""
+    rgb = np.full((8, 8, 3), (64, 150, 236), dtype=np.uint8)
+
+    assert "turned 30° right, tilted 10° up" in measure_normals(rgb).brief
+
+
+def test_normals_full_lists_faces_with_direction_and_box() -> None:
+    """Two halves of a map 400 wide.
+
+    The seam column 199 is curved, so the left face covers columns 0 to 198:
+    49.75% of the map, and a box ending at 199/400, both of which round to the
+    half. The right face covers columns 200 to 399.
+    """
+    rgb = np.zeros((8, 400, 3), dtype=np.uint8)
+    rgb[:, :200] = FACING_CAMERA
+    rgb[:, 200:] = TURNED_LEFT
+
+    full = measure_normals(rgb).full
+
+    assert "50% facing the camera, bounding box x 0.00 to 0.50, y 0.00 to 1.00" in full
+    assert "50% turned 45° left, bounding box x 0.50 to 1.00, y 0.00 to 1.00" in full
+
+
+def test_normals_face_box_maps_through_crop() -> None:
+    """A face filling a crop of the right half spans x 0.50 to 1.00 of the full image."""
+    rgb = np.full((8, 8, 3), FACING_CAMERA, dtype=np.uint8)
+
+    full = measure_normals(rgb, CropRegion(0.5, 0.0, 1.0, 1.0)).full
+
+    assert "bounding box x 0.50 to 1.00" in full
 
 
 def test_normals_gradient_is_curved() -> None:

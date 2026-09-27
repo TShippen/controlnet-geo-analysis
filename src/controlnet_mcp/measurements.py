@@ -21,6 +21,10 @@ EDGE_THRESHOLD = 128
 FLAT_GRADIENT = 0.05
 ORIENTATION_BIN = 0.25
 ORIENTATION_MIN_SHARE = 0.05
+# Degrees. The normals of a flat face may differ by about 3 degrees between
+# neighbouring pixels (``FLAT_GRADIENT``), so a smaller turn or tilt is within the
+# variation of a face that faces the camera squarely.
+FACING_TOLERANCE_DEGREES = 5
 LINE_LIMIT_BRIEF = 3
 LINE_LIMIT_FULL = 12
 
@@ -71,32 +75,48 @@ def measure_depth(gray: np.ndarray, region: CropRegion = FULL_IMAGE) -> Measurem
     return Measurement(brief=brief, full=f"{brief} Near region {_bounding_box(near, region)}.")
 
 
-def measure_normals(rgb: np.ndarray) -> Measurement:
-    """Split a surface normal map into flat and curved area and size its flat faces.
+def measure_normals(rgb: np.ndarray, region: CropRegion = FULL_IMAGE) -> Measurement:
+    """Split a surface normal map into flat and curved area and describe its flat faces.
 
     A pixel counts as flat when its normal barely changes towards its right and
-    lower neighbours. Flat normals are grouped by quantized bin, so a face is
-    only ever reported by how much of the image it covers, never by the
-    direction it faces: the encoding is relative to the camera, so the same
-    face takes a different color from another viewpoint.
-    The full form counts the bins covering at least ``ORIENTATION_MIN_SHARE``.
+    lower neighbours. Flat normals are grouped by quantized bin, and each group
+    is one face, reported by how much of the image it covers and by the
+    direction it faces. That direction comes from the mean normal of the
+    group's pixels and is relative to the camera: how far the face is turned
+    left or right of facing the camera and how far it is tilted up or down. The
+    same face gets a different direction from another viewpoint. The brief
+    form gives the largest face; the full form lists the faces covering at
+    least ``ORIENTATION_MIN_SHARE``, largest first, each with its bounding box.
+
+    Args:
+        rgb: The normal map.
+        region: The part of the reference image the map was rendered from.
     """
     normals = rgb.astype(np.float32) / 255.0 * 2.0 - 1.0
     flat = _neighbour_change(normals) < FLAT_GRADIENT
     total = flat.size
     flat_share = 100.0 * float(flat.sum()) / total
-    counts = _orientation_counts(normals, flat)
-    largest_share = 100.0 * float(counts.max()) / total if counts.size else 0.0
-    brief = (
-        f"Normals: flat {flat_share:.0f}%, curved {100.0 - flat_share:.0f}%; "
-        f"largest flat face {largest_share:.0f}%."
-    )
-    orientations = int((counts >= ORIENTATION_MIN_SHARE * total).sum())
-    verb = "orientation covers" if orientations == 1 else "orientations cover"
+    faces = _flat_faces(normals, flat)
+    largest = "largest flat face 0%"
+    if faces:
+        largest = f"largest flat face {faces[0].share(total):.0f}%, {faces[0].facing}"
+    brief = f"Normals: flat {flat_share:.0f}%, curved {100.0 - flat_share:.0f}%; {largest}."
     threshold = f"{ORIENTATION_MIN_SHARE:.0%}"
+    listed = [face for face in faces if face.count >= ORIENTATION_MIN_SHARE * total]
+    if not listed:
+        return Measurement(
+            brief=brief, full=f"{brief} No flat face covers at least {threshold} of the image."
+        )
+    entries = [
+        f"{face.share(total):.0f}% {face.facing}, {_bounding_box(face.mask, region)}"
+        for face in listed[:LINE_LIMIT_FULL]
+    ]
     return Measurement(
         brief=brief,
-        full=f"{brief} {orientations} flat {verb} at least {threshold} of the image.",
+        full=(
+            f"{brief} Flat faces covering at least {threshold} of the image, relative to the "
+            "camera: " + "; ".join(entries) + "."
+        ),
     )
 
 
@@ -197,12 +217,73 @@ def _neighbour_change(normals: np.ndarray) -> np.ndarray:
     return np.sqrt((right * right).sum(axis=2) + (lower * lower).sum(axis=2))
 
 
-def _orientation_counts(normals: np.ndarray, flat: np.ndarray) -> np.ndarray:
-    """Pixel count of every quantized facing direction among the flat pixels."""
+@dataclass(frozen=True)
+class _FlatFace:
+    """The flat pixels sharing one quantized normal.
+
+    Attributes:
+        count: How many pixels the face has.
+        facing: The direction of the face's mean normal, phrased relative to
+            the camera.
+        mask: The face's pixels in the map.
+    """
+
+    count: int
+    facing: str
+    mask: np.ndarray
+
+    def share(self, total: int) -> float:
+        """Percentage of a map of ``total`` pixels that the face covers."""
+        return 100.0 * self.count / total
+
+
+def _flat_faces(normals: np.ndarray, flat: np.ndarray) -> list[_FlatFace]:
+    """The largest flat faces of a decoded normal map, largest first.
+
+    Returns at most ``LINE_LIMIT_FULL`` faces, which is as many as any form of
+    the measurement reports.
+    """
     if not flat.any():
-        return np.zeros(0, dtype=np.int64)
-    bins = np.round(normals[flat] / ORIENTATION_BIN)
-    return np.unique(bins, axis=0, return_counts=True)[1]
+        return []
+    flat_normals = normals[flat]
+    _, inverse, counts = np.unique(
+        np.round(flat_normals / ORIENTATION_BIN), axis=0, return_inverse=True, return_counts=True
+    )
+    inverse = inverse.reshape(-1)
+    faces = []
+    for index in np.argsort(-counts, kind="stable")[:LINE_LIMIT_FULL]:
+        members = inverse == index
+        mask = np.zeros(flat.shape, dtype=bool)
+        mask[flat] = members
+        faces.append(
+            _FlatFace(
+                count=int(counts[index]),
+                facing=_facing(flat_normals[members].mean(axis=0)),
+                mask=mask,
+            )
+        )
+    return faces
+
+
+def _facing(normal: np.ndarray) -> str:
+    """Phrase the direction of a decoded normal relative to the camera.
+
+    The decoded red component is high for a face turned to the image left, so
+    its negation points right. The turn is the angle left or right of facing
+    the camera, and the tilt is the angle above or below level. An angle under
+    ``FACING_TOLERANCE_DEGREES`` is left out.
+    """
+    right, up, toward = -float(normal[0]), float(normal[1]), float(normal[2])
+    turn = round(math.degrees(math.atan2(right, toward)))
+    tilt = round(math.degrees(math.atan2(up, math.hypot(right, toward))))
+    parts = []
+    if abs(turn) >= FACING_TOLERANCE_DEGREES:
+        parts.append(f"turned {abs(turn)}° {'right' if turn > 0 else 'left'}")
+    if abs(tilt) >= FACING_TOLERANCE_DEGREES:
+        parts.append(f"tilted {abs(tilt)}° {'up' if tilt > 0 else 'down'}")
+    if not parts:
+        return "facing the camera"
+    return ", ".join(parts)
 
 
 def _segment_length(segment: Sequence[float]) -> float:
