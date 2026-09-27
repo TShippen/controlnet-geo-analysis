@@ -7,12 +7,16 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import numpy as np
 import pytest
 import torch
 from PIL import Image
 
-from conftest import SAMPLE_MEASUREMENT, sampled_test_spec, write_test_image
+from conftest import (
+    SAMPLE_MEASUREMENT,
+    fake_test_line_detection,
+    sampled_test_spec,
+    write_test_image,
+)
 from controlnet_mcp.analysis import AnalysisService, ResolutionError
 from controlnet_mcp.cache import AnalysisCache
 from controlnet_mcp.checkpoints import ZOE_CHECKPOINT, CheckpointSpec
@@ -529,26 +533,11 @@ def pair_of_references(settings: Settings) -> tuple[str, str]:
     return "large.png", "small.png"
 
 
-def record_detected_sizes(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
-    """Replace line detection with one that finds a single edge and records each image's size."""
-    sizes: list[tuple[int, int]] = []
-
-    def detect(
-        detector: object, image: Image.Image, resolution: int
-    ) -> tuple[np.ndarray, int, int]:
-        sizes.append(image.size)
-        return np.array([[0.0, 10.0, 60.0, 10.0]]), image.width, image.height
-
-    monkeypatch.setattr("controlnet_mcp.analysis.detect_line_segments", detect)
-    monkeypatch.setitem(PROCESSORS, "lines", make_fake_spec("lines", RunCounter()))
-    return sizes
-
-
 def test_compare_pairs_the_edges_of_two_images(
     service: AnalysisService, pair_of_references: tuple[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Both images have one edge at the same place of a 128x64 frame, so they pair at no offset."""
-    record_detected_sizes(monkeypatch)
+    fake_test_line_detection(monkeypatch)
 
     result = service.compare("large.png", "large.png", align="none", resolution=64)
 
@@ -562,7 +551,7 @@ def test_compare_crops_both_images_by_the_same_fractions(
     service: AnalysisService, pair_of_references: tuple[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The right half of a 128x64 image and of a 64x32 image are both square."""
-    sizes = record_detected_sizes(monkeypatch)
+    sizes = fake_test_line_detection(monkeypatch)
     first, second = pair_of_references
 
     result = service.compare(
@@ -577,13 +566,35 @@ def test_compare_with_plain_images_withholds_the_alignment(
     service: AnalysisService, pair_of_references: tuple[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Solid-color references have no features to fit a transform to."""
-    record_detected_sizes(monkeypatch)
+    fake_test_line_detection(monkeypatch)
     first, second = pair_of_references
 
     result = service.compare(first, second, resolution=64)
 
     assert "Alignment withheld" in result.measurement
+    assert result.paired is False
     assert Image.open(io.BytesIO(result.png)).size == (256, 64)
+
+
+def test_compare_says_when_an_image_reached_the_edge_limit(
+    service: AnalysisService, pair_of_references: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each fake image comes back with 200 edges, which is the most the detector returns."""
+    fake_test_line_detection(monkeypatch, edges=200)
+
+    result = service.compare("large.png", "large.png", align="none", resolution=64)
+
+    assert "Both images reached the limit of 200 detected edges" in result.measurement
+
+
+def test_compare_below_the_edge_limit_does_not_mention_it(
+    service: AnalysisService, pair_of_references: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_test_line_detection(monkeypatch, edges=199)
+
+    result = service.compare("large.png", "large.png", align="none", resolution=64)
+
+    assert "limit" not in result.measurement
 
 
 def test_compare_none_with_different_aspect_ratios_is_error(
@@ -606,13 +617,15 @@ def test_compare_rejects_files_outside_the_directory(
 def test_compare_off_reports_no_measurement(
     settings: Settings, pair_of_references: tuple[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    record_detected_sizes(monkeypatch)
+    fake_test_line_detection(monkeypatch)
 
     result = service_measuring(settings, "off").compare(
         "large.png", "large.png", align="none", resolution=64
     )
 
     assert result.measurement == ""
+    assert result.outcome == "Compared in one shared frame as asked, with no alignment fitted."
+    assert result.paired is True
 
 
 class StatefulDetector:

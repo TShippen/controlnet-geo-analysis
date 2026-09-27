@@ -84,7 +84,11 @@ reported, and the image shows the two sets of edges side by side. With `align` s
 caller asserts that the images already share one frame, as a render from a matching camera does,
 and images of different proportions are refused. The offsets left after a fitted transform mix
 real differences with the parallax of depth whenever the viewpoints differ, so the tool does not
-relate views of a scene taken from different positions. Comparisons are not cached.
+relate views of a scene taken from different positions. The response repeats how to read the
+offsets and what a pair is, and it says when an image reached the 200 edges the detector returns
+at most, since an edge with no partner may then be missing only from the other image's
+detection. How the images were aligned, or why they were not, is stated even when
+`RESULT_MEASUREMENTS` is `off`. Comparisons are not cached.
 
 Every analysis measures its own output. A short and a long form of that measurement are stored
 with the cached image, and `RESULT_MEASUREMENTS` in `.env` decides which one the agent sees.

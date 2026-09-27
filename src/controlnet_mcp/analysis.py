@@ -30,10 +30,11 @@ from controlnet_mcp.images import (
     png_size_and_measurement,
     resolve_reference_path,
 )
-from controlnet_mcp.measurements import Measurement, measure_comparison
+from controlnet_mcp.measurements import Measurement, comparison_outcome, measure_comparison
 from controlnet_mcp.model_manager import ModelManager, select_device
 from controlnet_mcp.processors import (
     DEFAULT_OPTIONS,
+    DETECTED_EDGE_LIMIT,
     PROCESSORS,
     AnalysisOptions,
     OptionError,
@@ -84,13 +85,18 @@ class ComparisonResult:
     """One comparison image plus the facts a tool response reports about it.
 
     ``measurement`` holds the form of the comparison's measurement that the
-    settings select, and is empty when measurements are switched off. ``crop``
-    is the part of the first image that was compared, aligned to its pixels,
-    or None when the whole images were.
+    settings select, and is empty when measurements are switched off.
+    ``outcome`` says in words alone how the images were brought into one
+    frame, or why they were not, and ``paired`` whether edges were paired,
+    which decides whether the image shows one frame or two panels. Both hold
+    in every measurement mode. ``crop`` is the part of the first image that
+    was compared, aligned to its pixels, or None when the whole images were.
     """
 
     png: bytes
     measurement: str
+    outcome: str
+    paired: bool
     crop: CropRegion | None
     align: AlignMode
     resolution: int
@@ -368,6 +374,7 @@ class AnalysisService:
             other.size,
             one.region,
             other.region,
+            DETECTED_EDGE_LIMIT,
         )
         logger.info(
             "Compared %s with %s: %d pairs",
@@ -378,6 +385,8 @@ class AnalysisService:
         return ComparisonResult(
             png=image_to_png_bytes(Image.fromarray(rendered), measurement),
             measurement=self._selected_form(measurement),
+            outcome=comparison_outcome(alignment),
+            paired=pairing is not None,
             crop=one.snapped,
             align=align,
             resolution=resolution,

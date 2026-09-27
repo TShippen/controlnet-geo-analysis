@@ -12,6 +12,7 @@ from PIL import Image
 from controlnet_mcp.checkpoints import CheckpointSpec, missing_checkpoints
 from controlnet_mcp.measurements import Measurement
 from controlnet_mcp.processors import (
+    PROCESSORS,
     AnalysisOptions,
     AnalysisOutput,
     ProcessorSpec,
@@ -129,6 +130,31 @@ def sampled_test_spec(kind: str, runs: list[int] | None = None) -> ProcessorSpec
         read_values=read_depth_values,
         values_description="Fake levels.",
     )
+
+
+def fake_test_line_detection(
+    monkeypatch: pytest.MonkeyPatch, edges: int = 1
+) -> list[tuple[int, int]]:
+    """Replace the line detection a comparison runs, which needs a checkpoint, with a fake.
+
+    The fake finds ``edges`` horizontal edges in every image, 60 pixels long
+    on rows 1, 2, and so on, the same in every image.
+
+    Returns:
+        A list that receives the size of each image the fake is given.
+    """
+    sizes: list[tuple[int, int]] = []
+    found = np.array([[0.0, float(row), 60.0, float(row)] for row in range(1, edges + 1)])
+
+    def detect(
+        detector: object, image: Image.Image, resolution: int
+    ) -> tuple[np.ndarray, int, int]:
+        sizes.append(image.size)
+        return found, image.width, image.height
+
+    monkeypatch.setattr("controlnet_mcp.analysis.detect_line_segments", detect)
+    monkeypatch.setitem(PROCESSORS, "lines", sampled_test_spec("lines"))
+    return sizes
 
 
 @pytest.fixture

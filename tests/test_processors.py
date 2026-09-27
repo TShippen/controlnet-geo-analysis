@@ -21,12 +21,14 @@ from controlnet_mcp.measurements import BEYOND_RANGE_MAX, EMPTY_MEASUREMENT
 from controlnet_mcp.processors import (
     ANALYSIS_KINDS,
     DEFAULT_OPTIONS,
+    DETECTED_EDGE_LIMIT,
     PROCESSORS,
     SAMPLED_KINDS,
     AnalysisOptions,
     AnalysisOutput,
     ProcessorSpec,
     UnknownAnalysisError,
+    detect_line_segments,
     get_processor,
 )
 from controlnet_mcp.regions import FULL_IMAGE, CropRegion
@@ -377,6 +379,29 @@ def test_depth_clips_the_farthest_share_to_black(
 
     gray = np.array(rendered.convert("L"))
     assert float((gray <= BEYOND_RANGE_MAX).mean()) >= 0.14
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_lines_on_a_busy_image_come_back_at_the_limit(
+    installed_checkpoints: Callable[[Iterable[CheckpointSpec]], Path],
+) -> None:
+    """Pins the most edges the real detector returns, which the agent-facing text states.
+
+    A grid of 40 lines each way has far more than 200 straight edges between
+    its crossings.
+    """
+    spec = get_processor("lines")
+    detector = spec.build(installed_checkpoints(spec.checkpoints), torch.device("cpu"))
+    grid = Image.new("RGB", (512, 512), (240, 240, 240))
+    draw = ImageDraw.Draw(grid)
+    for position in range(6, 512, 13):
+        draw.line((position, 0, position, 511), fill=(20, 20, 20), width=2)
+        draw.line((0, position, 511, position), fill=(20, 20, 20), width=2)
+
+    segments, _, _ = detect_line_segments(detector, grid, 512)
+
+    assert len(segments) == DETECTED_EDGE_LIMIT
 
 
 @pytest.mark.slow

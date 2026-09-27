@@ -11,7 +11,12 @@ from mcp import Client
 from mcp.types import ImageContent, TextContent
 from PIL import Image
 
-from conftest import SAMPLE_MEASUREMENT, sampled_test_spec, write_test_image
+from conftest import (
+    SAMPLE_MEASUREMENT,
+    fake_test_line_detection,
+    sampled_test_spec,
+    write_test_image,
+)
 from controlnet_mcp.analysis import AnalysisService
 from controlnet_mcp.cache import AnalysisCache
 from controlnet_mcp.checkpoints import PREPARE_COMMAND
@@ -568,6 +573,65 @@ async def test_compare_none_with_different_proportions_is_error(client: Client) 
 
     assert result.is_error is True
     assert "proportions" in result.content[0].text
+
+
+async def test_compare_description_gives_offset_units_and_the_edge_limit(client: Client) -> None:
+    description = await tool_description(client, "compare_images")
+
+    assert "as (right, down) in fractions of the first image's width and height" in description
+    assert "At most 200 edges are detected in each image" in description
+
+
+async def test_compare_off_still_states_the_outcome_and_the_image(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """chair.png against itself in a shared frame: paired, so the image is one frame."""
+    fake_test_line_detection(monkeypatch)
+
+    async with client_measuring(settings, "off") as client:
+        result = await client.call_tool(
+            "compare_images", {"first": "chair.png", "second": "chair.png", "align": "none"}
+        )
+
+    text = result.content[0]
+    assert isinstance(text, TextContent)
+    assert text.text == (
+        "Comparison of chair.png with chair.png, align none, at resolution 64. Compared in one "
+        "shared frame as asked, with no alignment fitted. The image shows the first image "
+        "dimmed, its edges in cyan, the second image's edges in magenta, and a yellow line "
+        "joining the two edges of each pair."
+    )
+
+
+async def test_compare_off_states_a_withheld_alignment(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Solid-color references have no features, so nothing is aligned."""
+    fake_test_line_detection(monkeypatch)
+
+    async with client_measuring(settings, "off") as client:
+        result = await client.call_tool(
+            "compare_images", {"first": "chair.png", "second": "chair.png"}
+        )
+
+    text = result.content[0]
+    assert isinstance(text, TextContent)
+    assert "Alignment withheld" in text.text
+    assert "side by side" in text.text
+    assert "Nothing in it is aligned." in text.text
+
+
+async def test_compare_brief_says_a_withheld_image_is_two_panels(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_test_line_detection(monkeypatch)
+
+    result = await client.call_tool("compare_images", {"first": "chair.png", "second": "chair.png"})
+
+    text = result.content[0]
+    assert isinstance(text, TextContent)
+    assert "No edges were paired." in text.text
+    assert "side by side" in text.text
 
 
 async def test_compare_without_the_checkpoint_is_error(client: Client) -> None:

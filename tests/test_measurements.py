@@ -11,6 +11,7 @@ from conftest import camera_scene_test_segments
 from controlnet_mcp.comparison import Alignment, EdgePair, Pairing, identity_alignment
 from controlnet_mcp.evidence import Withheld
 from controlnet_mcp.measurements import (
+    comparison_outcome,
     measure_comparison,
     measure_depth,
     measure_edges,
@@ -432,6 +433,80 @@ def test_comparison_full_counts_broken_pieces_apart_from_unmatched() -> None:
     assert "not counted as unmatched: 0 in the first image and 1 in the second" in measurement.full
     assert "Longest unmatched in the first image: (0.00,0.78)-(0.25,0.78)." in measurement.full
     assert "Compared in one shared frame as asked" in measurement.brief
+
+
+def test_comparison_fitted_response_says_offsets_include_parallax() -> None:
+    first, second, pairing = comparison_test_rows([2.0])
+
+    brief = measure_comparison(
+        comparison_test_alignment(), pairing, first, second, (256, 256), (256, 256)
+    ).brief
+
+    assert "Offsets are (right, down) as fractions of the first image's width and height." in brief
+    assert "what is left after the fitted transform" in brief
+    assert "include the parallax of depth" in brief
+    assert "need not be the same physical edge" in brief
+
+
+def test_comparison_shared_frame_response_names_the_asserted_frame() -> None:
+    first, second, pairing = comparison_test_rows([2.0])
+
+    brief = measure_comparison(
+        identity_alignment((256, 256), (256, 256)), pairing, first, second, (256, 256), (256, 256)
+    ).brief
+
+    assert "measured in the shared frame that was asked for" in brief
+    assert "parallax" not in brief
+
+
+def test_comparison_full_explains_the_ends() -> None:
+    first, second, pairing = comparison_test_rows([2.0])
+
+    measurement = measure_comparison(
+        comparison_test_alignment(), pairing, first, second, (256, 256), (256, 256)
+    )
+
+    assert "in lengths of the first edge; a negative value means it stops short" in measurement.full
+    assert "Ends give" not in measurement.brief
+
+
+def test_comparison_names_the_image_that_reached_the_edge_limit() -> None:
+    """Three edges in the first image against a limit of 3, and one in the second."""
+    first, _, _ = comparison_test_rows([2.0, 8.0, 5.0])
+    _, second, pairing = comparison_test_rows([2.0])
+
+    brief = measure_comparison(
+        comparison_test_alignment(), pairing, first, second, (256, 256), (256, 256), edge_limit=3
+    ).brief
+
+    assert "The first image reached the limit of 3 detected edges" in brief
+    assert "an edge left unmatched in the other image may be one of them" in brief
+
+
+def test_comparison_withheld_text_names_the_edge_limit_too() -> None:
+    first, second, _ = comparison_test_rows([2.0])
+
+    brief = measure_comparison(
+        Withheld("a test"), None, first, second, (256, 256), (256, 256), edge_limit=1
+    ).brief
+
+    assert "Both images reached the limit of 1 detected edges" in brief
+
+
+def test_comparison_outcome_has_no_numbers() -> None:
+    """The outcome is what a comparison reports with measurements off."""
+    outcomes = [
+        comparison_outcome(comparison_test_alignment()),
+        comparison_outcome(comparison_test_alignment(ambiguous=True)),
+        comparison_outcome(identity_alignment((256, 256), (256, 256))),
+        comparison_outcome(Withheld("views too different to align")),
+    ]
+
+    assert not any(character.isdigit() for outcome in outcomes for character in outcome)
+    assert "second alignment is supported nearly as well" in outcomes[1]
+    assert outcomes[3] == (
+        "Alignment withheld: views too different to align. No edges were paired."
+    )
 
 
 def test_comparison_withheld_text_has_no_pairs() -> None:

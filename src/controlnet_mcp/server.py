@@ -27,6 +27,7 @@ from controlnet_mcp.config import MeasurementSetting, apply_download_policy, loa
 from controlnet_mcp.images import ReferenceImageError, ReferenceImageInfo
 from controlnet_mcp.model_manager import MissingCheckpointError
 from controlnet_mcp.processors import (
+    DETECTED_EDGE_LIMIT,
     PROCESSORS,
     SAMPLED_KINDS,
     AnalysisKind,
@@ -67,11 +68,20 @@ SERVER_INSTRUCTIONS = (
     "size; get one known dimension from the user or the image."
 )
 
+PAIRED_IMAGE_READING = (
+    "The image shows the first image dimmed, its edges in cyan, the second image's edges in "
+    "magenta, and a yellow line joining the two edges of each pair."
+)
+SIDE_BY_SIDE_READING = (
+    "The image shows the two images side by side, each dimmed, the first with its edges in "
+    "cyan and the second with its edges in magenta. Nothing in it is aligned."
+)
+
 COMPARISON_DESCRIPTION = (
     "Pair the straight edges of two reference images and report how far apart each pair lies. "
-    "Neither image is treated as the correct one. The image shows the first image dimmed, its "
-    "edges in cyan, the second image's edges in magenta, and a yellow line joining the two "
-    "edges of each pair.\n"
+    "Neither image is treated as the correct one. Each offset is how far the second image's "
+    "edge lies from the first image's edge, as (right, down) in fractions of the first image's "
+    f"width and height. {PAIRED_IMAGE_READING}\n"
     "- align fit: one flat transform is fitted from features the two images share, and the "
     "offsets are what remains after it. Whenever the viewpoints differ, the offsets mix real "
     "differences with the parallax of depth, and the result cannot tell them apart.\n"
@@ -83,8 +93,11 @@ COMPARISON_DESCRIPTION = (
     "in the scene produces. Rows of identical parts leave few features to fit, and an "
     "alignment that is one repeat off is not always caught. When too few features "
     "match, the result says the views cannot be aligned and gives no pairs, and the image "
-    "shows the two sets of edges side by side. This tool does not relate views of a 3D scene "
-    "taken from different positions."
+    "shows the two sets of edges side by side. At most "
+    f"{DETECTED_EDGE_LIMIT} edges are detected in each image, so in a busy image some edges "
+    "are missing, and an edge with no partner may be missing from the other image only "
+    "because of that; the result says when an image reached the limit. This tool does not "
+    "relate views of a 3D scene taken from different positions."
 )
 
 _EXPECTED_ERRORS = (
@@ -396,9 +409,12 @@ def _sample_analysis_description() -> str:
 def _comparison_text(result: ComparisonResult, first: str, second: str) -> str:
     """The text block returned beside the comparison image.
 
-    It names the two images, how they were brought into one frame, and the
-    part compared when they were cropped, followed by the measurement. With
-    measurements off the measurement is empty and the text ends there.
+    It names the two images and the part compared when they were cropped,
+    followed by the measurement. With measurements off there are no numbers,
+    and the text says instead how the images were brought into one frame, or
+    why they were not, and what the image shows, since that outcome decides
+    how the image is to be read. When nothing was paired the image is two
+    panels instead of one frame, and the text says so in every mode.
     """
     cropped = ""
     if result.crop is not None:
@@ -412,7 +428,10 @@ def _comparison_text(result: ComparisonResult, first: str, second: str) -> str:
         f"at resolution {result.resolution}."
     )
     if not result.measurement:
-        return summary
+        reading = PAIRED_IMAGE_READING if result.paired else SIDE_BY_SIDE_READING
+        return f"{summary} {result.outcome} {reading}"
+    if not result.paired:
+        return f"{summary} {result.measurement} {SIDE_BY_SIDE_READING}"
     return f"{summary} {result.measurement}"
 
 

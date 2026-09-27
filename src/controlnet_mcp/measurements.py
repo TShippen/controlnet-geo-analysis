@@ -51,6 +51,10 @@ GROUP_COLOR_NAMES = tuple(name for name, _ in GROUP_COLORS)
 # Degrees. A group whose median edge sits at half the angle allowed to any edge
 # fits its point loosely: lens distortion, curved edges, or mixed directions.
 LOOSE_FIT_DEGREES = INLIER_DEGREES / 2
+ENDS_READING = (
+    "Ends give how far the second edge runs past the first edge's start and past its end, in "
+    "lengths of the first edge; a negative value means it stops short."
+)
 
 
 @dataclass(frozen=True)
@@ -343,6 +347,7 @@ def measure_comparison(
     second_size: tuple[int, int],
     region: CropRegion = FULL_IMAGE,
     second_region: CropRegion | None = None,
+    edge_limit: int | None = None,
 ) -> Measurement:
     """Report how two images were aligned and how far apart their paired edges lie.
 
@@ -356,6 +361,11 @@ def measure_comparison(
     length, and names the longest unmatched edges. When the alignment is
     withheld there are no pairs, and the text gives the reason.
 
+    Both forms close by saying how to read the offsets and what a pair is,
+    so the numbers are never given without their meaning. When an image has
+    as many edges as the detector returns at most, the text says that some of
+    its edges are missing.
+
     Args:
         alignment: How the second image maps onto the first, or why not.
         pairing: The pairs, or None when the alignment is withheld.
@@ -365,21 +375,24 @@ def measure_comparison(
         second_size: Width and height of the second image's detection frame.
         region: The part of the first reference image its frame was rendered from.
         second_region: The same for the second image; ``region`` when None.
+        edge_limit: The most edges the detector returns for one image, or
+            None when it has no limit.
     """
     second_region = second_region if second_region is not None else region
     first = np.asarray(first_segments, dtype=np.float64).reshape(-1, 4)
     second = np.asarray(second_segments, dtype=np.float64).reshape(-1, 4)
+    limited = _edge_limit_phrase(len(first), len(second), edge_limit)
     if isinstance(alignment, Withheld) or pairing is None:
         reason = alignment.reason if isinstance(alignment, Withheld) else "no pairing was made"
         return _both_forms(
             f"Alignment withheld: {reason}. No edges were paired. Straight edges found: "
-            f"{len(first)} in the first image and {len(second)} in the second."
+            f"{len(first)} in the first image and {len(second)} in the second.{limited}"
         )
     noun = "pair" if len(pairing.pairs) == 1 else "pairs"
     opening = (
         f"{_alignment_phrase(alignment)} {len(pairing.pairs)} {noun} of edges; unmatched "
         f"{len(pairing.unmatched_first)} in the first image and "
-        f"{len(pairing.unmatched_second)} in the second."
+        f"{len(pairing.unmatched_second)} in the second.{limited}"
     )
     ordered = sorted(pairing.pairs, key=lambda pair: math.hypot(*pair.offset), reverse=True)
     brief_pairs = []
@@ -406,9 +419,68 @@ def measure_comparison(
     unmatched = _longest_unmatched(
         first, pairing.unmatched_first, first_size, region, "first"
     ) + _longest_unmatched(second, pairing.unmatched_second, second_size, second_region, "second")
+    reading = _offset_reading(alignment)
     return Measurement(
-        brief=f"{opening} Furthest apart: " + "; ".join(brief_pairs[:LINE_LIMIT_BRIEF]) + ".",
-        full=f"{opening} Furthest apart: " + "; ".join(full_pairs) + f".{broken}{unmatched}",
+        brief=(
+            f"{opening} Furthest apart: "
+            + "; ".join(brief_pairs[:LINE_LIMIT_BRIEF])
+            + f". {reading}"
+        ),
+        full=(
+            f"{opening} Furthest apart: "
+            + "; ".join(full_pairs)
+            + f". {reading} {ENDS_READING}{broken}{unmatched}"
+        ),
+    )
+
+
+def comparison_outcome(alignment: Alignment | Withheld) -> str:
+    """How two images were brought into one frame, in words alone.
+
+    This is what a comparison reports when measurements are switched off: the
+    outcome decides what the image shows, so it is stated in every mode.
+    """
+    if isinstance(alignment, Withheld):
+        return f"Alignment withheld: {alignment.reason}. No edges were paired."
+    if not alignment.fitted:
+        return "Compared in one shared frame as asked, with no alignment fitted."
+    fitted = "Aligned by a transform fitted to features the two images share."
+    if not alignment.ambiguous:
+        return fitted
+    return f"{fitted} A second alignment is supported nearly as well; the pairs assume the first."
+
+
+def _offset_reading(alignment: Alignment) -> str:
+    """What the offsets of a comparison are, and what a pair is and is not."""
+    if alignment.fitted:
+        frame = (
+            "They are what is left after the fitted transform, so wherever the viewpoints "
+            "differ they include the parallax of depth."
+        )
+    else:
+        frame = "They are measured in the shared frame that was asked for."
+    return (
+        "Offsets are (right, down) as fractions of the first image's width and height. "
+        f"{frame} A pair is two edges lying close together, which need not be the same "
+        "physical edge."
+    )
+
+
+def _edge_limit_phrase(first_count: int, second_count: int, edge_limit: int | None) -> str:
+    """Which images have as many edges as the detector returns, with a leading space, or nothing."""
+    if edge_limit is None:
+        return ""
+    reached = [
+        name
+        for name, count in (("first", first_count), ("second", second_count))
+        if count >= edge_limit
+    ]
+    if not reached:
+        return ""
+    which = "Both images" if len(reached) == 2 else f"The {reached[0]} image"
+    return (
+        f" {which} reached the limit of {edge_limit} detected edges, so some edges there are "
+        "missing, and an edge left unmatched in the other image may be one of them."
     )
 
 

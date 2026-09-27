@@ -91,6 +91,10 @@ LINE_DISTANCE_THRESHOLD = 0.1
 # outline and all three families of parallel edges while dropping the short
 # fragments; 10% already broke building corners and outlines apart.
 LONG_LINE_FRACTION = 0.06
+# The most edges the line detector returns for one image. It keeps its 200
+# strongest candidates and drops the rest, so a busy image comes back with
+# exactly this many and some of its edges missing.
+DETECTED_EDGE_LIMIT = 200
 
 LineLength = Literal["all", "long"]
 
