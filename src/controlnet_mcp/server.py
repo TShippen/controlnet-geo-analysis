@@ -520,6 +520,8 @@ def _result_text(result: AnalysisResult, filename: str, mode: MeasurementSetting
     With measurements off, the text repeats what the analysis shows and how to
     read it. Otherwise it names the output and reports what was measured from it.
     Either way it says which part of the image was analyzed when it was cropped.
+    The size it gives is that of the returned image, which is rendered at the
+    working resolution and so differs from the size of the reference file.
     """
     cropped = ""
     if result.crop is not None:
@@ -528,16 +530,14 @@ def _result_text(result: AnalysisResult, filename: str, mode: MeasurementSetting
             f", cropped to x {region.x0:.2f} to {region.x1:.2f}, "
             f"y {region.y0:.2f} to {region.y1:.2f}"
         )
-    if mode == "off":
-        return (
-            f"{result.kind} analysis of {filename} ({result.width}x{result.height}){cropped}. "
-            f"{result.description}"
-        )
-    cached = ", from cache" if result.from_cache else ""
-    summary = (
-        f"{result.kind} analysis of {filename} ({result.width}x{result.height}){cropped} "
-        f"at resolution {result.resolution}{cached}."
+    subject = (
+        f"{result.kind} analysis of {filename}{cropped}, returned as a "
+        f"{result.width}x{result.height} image"
     )
+    if mode == "off":
+        return f"{subject}. {result.description}"
+    cached = ", from cache" if result.from_cache else ""
+    summary = f"{subject} at resolution {result.resolution}{cached}."
     if not result.measurement:
         return summary
     return f"{summary} {result.measurement}"

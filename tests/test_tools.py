@@ -458,7 +458,8 @@ async def test_off_text_matches_previous_format(settings: Settings) -> None:
     text = result.content[0]
     assert isinstance(text, TextContent)
     assert text.text == (
-        f"canny analysis of chair.png (128x64). {PROCESSORS['canny'].description} "
+        "canny analysis of chair.png, returned as a 128x64 image. "
+        f"{PROCESSORS['canny'].description} "
         "Detection resolution 64."
     )
 
