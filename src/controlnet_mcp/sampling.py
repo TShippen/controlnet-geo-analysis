@@ -122,10 +122,32 @@ class SampleReport(BaseModel):
     """The samples read from one analysis and, for a line, the changes between them.
 
     ``changes`` is empty when points were sampled, since separate points have
-    no order to change along.
+    no order to change along. The report carries what its values are and are
+    not, and which rendered map they were read from, so the numbers are never
+    given without their meaning.
     """
 
     analysis: str = Field(description="The analysis the values were read from.")
+    reading: str = Field(
+        description="What the values of this analysis are, and what they are not."
+    )
+    resolution: int = Field(description="Working resolution of the map the values were read from.")
+    map_width: int = Field(description="Width in pixels of that map.")
+    map_height: int = Field(description="Height in pixels of that map.")
+    crop: list[float] | None = Field(
+        description=(
+            "The part of the image the map shows, [x0, y0, x1, y1] as fractions of the full "
+            "image, or null when it shows the whole image. Values read from a crop are not "
+            "comparable with values read from the whole image or from another crop."
+        )
+    )
+    sample_spacing_pixels: float | None = Field(
+        description=(
+            "For a line, the distance between consecutive samples in pixels of the map. A "
+            "change is located no more finely than this. Each sample reads a window 5 pixels "
+            "wide, so samples closer together than that overlap. Null for points."
+        )
+    )
     samples: list[Sample] = Field(description="One reading per position, in the order asked.")
     changes: list[ValueChange] = Field(
         description=(

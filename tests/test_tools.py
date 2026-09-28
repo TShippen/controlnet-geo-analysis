@@ -496,6 +496,26 @@ async def test_sample_analysis_returns_structured_samples(
     assert result.structured_content["samples"][0]["value"] == [50]
 
 
+async def test_sample_analysis_response_carries_its_reading(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The response says what its values are, and not only the tool description."""
+    monkeypatch.setitem(PROCESSORS, "depth", sampled_test_spec("depth"))
+
+    result = await client.call_tool(
+        "sample_analysis",
+        {"filename": "chair.png", "analysis": "depth", "points": [[0.25, 0.5]]},
+    )
+
+    assert result.structured_content["reading"] == "Fake levels."
+    assert result.structured_content["resolution"] == 64
+
+
+async def test_real_sampled_analyses_say_what_their_values_are_not() -> None:
+    assert "not distances" in PROCESSORS["depth"].values_description
+    assert "not to the world" in PROCESSORS["normals"].values_description
+
+
 async def test_sample_description_states_what_values_are_not(client: Client) -> None:
     description = await tool_description(client, "sample_analysis")
 

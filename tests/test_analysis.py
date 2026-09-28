@@ -457,6 +457,36 @@ def test_sample_reads_the_rendered_map(
     assert [sample.value for sample in report.samples] == [[50]]
 
 
+def test_sample_report_says_what_was_read_and_what_it_means(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fake map is 128x64 at resolution 64 and describes its values as fake levels."""
+    monkeypatch.setitem(PROCESSORS, "fake", sampled_test_spec("fake"))
+
+    report = service.sample(reference, "fake", [(0.25, 0.5)], None, None, 64)
+
+    assert report.reading == "Fake levels."
+    assert (report.resolution, report.map_width, report.map_height) == (64, 128, 64)
+    assert report.crop is None
+    assert report.sample_spacing_pixels is None
+
+
+def test_sample_report_gives_the_crop_and_the_line_spacing(
+    service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A line across a crop of the right half, x 0.5 to 1.0, spans the 128-pixel map.
+
+    Five samples leave four steps of 32 pixels.
+    """
+    monkeypatch.setitem(PROCESSORS, "fake", sampled_test_spec("fake"))
+    crop = CropRegion.from_list([0.5, 0.0, 1.0, 1.0])
+
+    report = service.sample(reference, "fake", None, (0.5, 0.5, 1.0, 0.5), 5, 64, crop)
+
+    assert report.crop == [0.5, 0.0, 1.0, 1.0]
+    assert report.sample_spacing_pixels == 32.0
+
+
 def test_sample_line_uses_the_default_count(
     service: AnalysisService, reference: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

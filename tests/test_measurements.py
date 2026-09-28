@@ -119,6 +119,27 @@ def test_normals_brief_names_largest_face_direction() -> None:
     assert "turned 45° left" in measure_normals(rgb).brief
 
 
+def test_normals_brief_says_directions_are_relative_to_the_camera() -> None:
+    rgb = np.full((8, 8, 3), TURNED_LEFT, dtype=np.uint8)
+
+    measurement = measure_normals(rgb)
+
+    assert measurement.brief.endswith(
+        "Directions are relative to the camera; sky counts as a face."
+    )
+    assert "The same face reads differently in another view" in measurement.full
+
+
+def test_normals_brief_stays_within_its_length_at_its_longest() -> None:
+    """A face both turned and tilted gives the longest direction the brief form can carry.
+
+    The limit of 160 characters is the one the real processors are held to.
+    """
+    rgb = np.full((8, 8, 3), (64, 150, 236), dtype=np.uint8)
+
+    assert len(measure_normals(rgb).brief) < 160
+
+
 def test_normals_facing_camera_is_named() -> None:
     rgb = np.full((8, 8, 3), FACING_CAMERA, dtype=np.uint8)
 

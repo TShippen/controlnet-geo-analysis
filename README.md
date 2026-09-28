@@ -75,8 +75,9 @@ surfaces, so the boundary flag catches only sharp steps there, and a line across
 way to find it. Depth values are levels that order surfaces within one
 render; they are not distances. Normal values are directions relative to the camera, so the same
 face reads differently from another viewpoint. Sky and open background get values in both maps,
-usually steady ones, so a steady reading does not mean a surface is there. Any other analysis is
-rejected.
+usually steady ones, so a steady reading does not mean a surface is there. The report carries
+that reading with the numbers, along with the resolution, size, and crop of the map it read and,
+for a line, the spacing between samples. Any other analysis is rejected.
 
 `compare_images` detects the straight edges of two images, brings the second image into the
 frame of the first, and pairs edges that lie close in direction and position. Each pair reports
@@ -97,12 +98,13 @@ detection. How the images were aligned, or why they were not, is stated even whe
 
 Every analysis measures its own output. A short and a long form of that measurement are stored
 with the cached image, and `RESULT_MEASUREMENTS` in `.env` decides which one the agent sees.
-`off` sends no numbers for any analysis, segments included: the result text repeats what the
-analysis shows and how to read it.
-`brief`, the default, replaces that with one measured sentence, since the tool description
-already says how to read each analysis. `full` extends the sentence with whatever else that
-analysis measured, such as a bounding box or a centroid. The setting is read at startup and no
-tool argument exposes it, so both response styles can be compared over the same cache.
+`off` sends no numbers from `analyze_image` or `compare_images`, segments included: the result
+text repeats what the analysis shows and how to read it.
+`brief`, the default, replaces that with the measured result and what it means. `full` extends it
+with whatever else that analysis measured, such as a bounding box or a centroid. The setting is
+read at startup and no tool argument exposes it, so both response styles can be compared over the
+same cache. `sample_analysis` returns its numbers whatever the setting, since reading numbers is
+all it does.
 
 Filenames are confined to the reference directory. Absolute paths, parent references, symlinks
 that leave the directory, and unsupported extensions are rejected. Supported formats are PNG,

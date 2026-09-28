@@ -6,6 +6,7 @@ exceptions into tool errors.
 
 import io
 import logging
+import math
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -47,6 +48,7 @@ from controlnet_mcp.sampling import (
     DEFAULT_LINE_SAMPLES,
     SampleReport,
     SamplingError,
+    ValueChange,
     sample_line,
     sample_points,
 )
@@ -294,18 +296,27 @@ class AnalysisService:
             pixels = np.array(rendered.convert("RGB"), dtype=np.uint8)
         value_map = spec.read_values(pixels)
         region = result.crop if result.crop is not None else FULL_IMAGE
+        changes: list[ValueChange] = []
+        spacing = None
         if line is not None:
-            samples, changes = sample_line(
-                value_map,
-                (line[0], line[1]),
-                (line[2], line[3]),
-                count if count is not None else DEFAULT_LINE_SAMPLES,
-                region,
-            )
-            return SampleReport(analysis=spec.kind, samples=samples, changes=changes)
-        assert points is not None
+            taken = count if count is not None else DEFAULT_LINE_SAMPLES
+            start, end = (line[0], line[1]), (line[2], line[3])
+            samples, changes = sample_line(value_map, start, end, taken, region)
+            spacing = _spacing_pixels(start, end, taken, region, result.width, result.height)
+        else:
+            assert points is not None
+            samples = sample_points(value_map, points, region)
+        shown = result.crop
         return SampleReport(
-            analysis=spec.kind, samples=sample_points(value_map, points, region), changes=[]
+            analysis=spec.kind,
+            reading=spec.values_description,
+            resolution=result.resolution,
+            map_width=result.width,
+            map_height=result.height,
+            crop=[shown.x0, shown.y0, shown.x1, shown.y1] if shown is not None else None,
+            sample_spacing_pixels=spacing,
+            samples=samples,
+            changes=changes,
         )
 
     def compare(
@@ -432,6 +443,21 @@ class AnalysisService:
                 f"{MIN_RESOLUTION} to {MAX_RESOLUTION}."
             )
         return resolution
+
+
+def _spacing_pixels(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    count: int,
+    region: CropRegion,
+    width: int,
+    height: int,
+) -> float:
+    """Distance between consecutive samples of a line, in pixels of the map it is read from."""
+    start_x, start_y = region.to_local(*start)
+    end_x, end_y = region.to_local(*end)
+    length = math.hypot((end_x - start_x) * width, (end_y - start_y) * height)
+    return round(length / (count - 1), 1)
 
 
 def _gray_pixels(image: Image.Image) -> np.ndarray:

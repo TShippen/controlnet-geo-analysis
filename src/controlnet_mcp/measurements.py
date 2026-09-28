@@ -51,6 +51,11 @@ GROUP_COLOR_NAMES = tuple(name for name, _ in GROUP_COLORS)
 # Degrees. A group whose median edge sits at half the angle allowed to any edge
 # fits its point loosely: lens distortion, curved edges, or mixed directions.
 LOOSE_FIT_DEGREES = INLIER_DEGREES / 2
+FACING_READING = "Directions are relative to the camera; sky counts as a face."
+FACING_READING_FULL = (
+    "The same face reads differently in another view, and a face is any region of even "
+    "direction, which sky and open background are too."
+)
 ENDS_READING = (
     "Ends give how far the second edge runs past the first edge's start and past its end, in "
     "lengths of the first edge; a negative value means it stops short."
@@ -118,9 +123,10 @@ def measure_normals(rgb: np.ndarray, region: CropRegion = FULL_IMAGE) -> Measure
     down. The same face gets a different direction from another viewpoint. A
     face is a region of the map, not a recognized surface: sky and open
     background have even normals too and are reported like any other face.
-    The brief form gives the largest face; the full form lists the faces
-    covering at least ``ORIENTATION_MIN_SHARE``, largest first, each with its
-    bounding box.
+    Both forms say so whenever a face is reported, the brief form in a few
+    words to stay within its length. The brief form gives the largest face;
+    the full form lists the faces covering at least
+    ``ORIENTATION_MIN_SHARE``, largest first, each with its bounding box.
 
     Args:
         rgb: The normal map.
@@ -131,15 +137,23 @@ def measure_normals(rgb: np.ndarray, region: CropRegion = FULL_IMAGE) -> Measure
     total = flat.size
     flat_share = 100.0 * float(flat.sum()) / total
     faces = _flat_faces(normals, flat)
-    largest = "largest flat face 0%"
+    largest = "largest flat face 0%."
     if faces:
-        largest = f"largest flat face {faces[0].share(total):.0f}%, {faces[0].facing}"
-    brief = f"Normals: flat {flat_share:.0f}%, curved {100.0 - flat_share:.0f}%; {largest}."
+        largest = (
+            f"largest flat face {faces[0].share(total):.0f}%, {faces[0].facing}. {FACING_READING}"
+        )
+    brief = f"Normals: flat {flat_share:.0f}%, curved {100.0 - flat_share:.0f}%; {largest}"
     threshold = f"{ORIENTATION_MIN_SHARE:.0%}"
     listed = [face for face in faces if face.count >= ORIENTATION_MIN_SHARE * total]
+    if not faces:
+        return _both_forms(brief)
     if not listed:
         return Measurement(
-            brief=brief, full=f"{brief} No flat face covers at least {threshold} of the image."
+            brief=brief,
+            full=(
+                f"{brief} {FACING_READING_FULL} No flat face covers at least {threshold} of "
+                "the image."
+            ),
         )
     entries = [
         f"{face.share(total):.0f}% {face.facing}, {_bounding_box(face.mask, region)}"
@@ -148,8 +162,8 @@ def measure_normals(rgb: np.ndarray, region: CropRegion = FULL_IMAGE) -> Measure
     return Measurement(
         brief=brief,
         full=(
-            f"{brief} Flat faces covering at least {threshold} of the image, relative to the "
-            "camera: " + "; ".join(entries) + "."
+            f"{brief} {FACING_READING_FULL} Flat faces covering at least {threshold} of the "
+            "image: " + "; ".join(entries) + "."
         ),
     )
 

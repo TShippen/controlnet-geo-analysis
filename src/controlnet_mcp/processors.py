@@ -579,7 +579,7 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         checkpoints=(NORMALBAE_CHECKPOINT,),
         build=_build_normals,
         run=_run_normals,
-        version="3",
+        version="4",
         read_values=read_normal_values,
         values_description=(
             "The direction a surface faces, as the components [right, up, toward the camera] "
