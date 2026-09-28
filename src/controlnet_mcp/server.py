@@ -184,8 +184,10 @@ def build_server(service: AnalysisService) -> MCPServer:
     ) -> Image:
         """Show an original reference image.
 
-        Look at it before analyzing, and use it to choose a box or point when
-        you want a region segmented.
+        The image is returned as the file stores it, at the width and height
+        list_reference_images gives, and is never scaled down. Look at it
+        before analyzing, and use it to choose a box or point when you want a
+        region segmented.
         """
         try:
             data, mime = images.read_reference_bytes(service.settings.reference_image_dir, filename)
