@@ -90,15 +90,17 @@ def test_max_loaded_below_one_rejected(tmp_path: Path) -> None:
 
 
 def test_get_builds_once_and_reuses(tmp_path: Path) -> None:
-    spec = make_spec(tmp_path, "depth")
+    build = RecordingBuild()
+    checkpoint = write_test_checkpoint(tmp_path, "depth.pt")
+    spec = FakeProcessorSpec(kind="depth", checkpoints=(checkpoint,), build=build)
     manager = ModelManager(tmp_path, torch.device("cpu"), max_loaded=1)
 
     first = manager.get(spec)
     second = manager.get(spec)
 
     assert first is second
-    assert len(spec.build.calls) == 1
-    assert spec.build.calls[0] == (tmp_path, torch.device("cpu"))
+    assert len(build.calls) == 1
+    assert build.calls[0] == (tmp_path, torch.device("cpu"))
 
 
 def test_specs_sharing_a_detector_load_it_once(tmp_path: Path) -> None:
@@ -174,25 +176,27 @@ def test_get_respects_max_loaded_two(tmp_path: Path) -> None:
 
 def test_missing_checkpoint_error_carries_the_missing_checkpoint(tmp_path: Path) -> None:
     absent = CheckpointSpec("test/repo", "gone.pt", Path("annotators/gone.pt"))
-    spec = FakeProcessorSpec(kind="depth", checkpoints=(absent,), build=RecordingBuild())
+    build = RecordingBuild()
+    spec = FakeProcessorSpec(kind="depth", checkpoints=(absent,), build=build)
     manager = ModelManager(tmp_path, torch.device("cpu"), max_loaded=1)
 
     with pytest.raises(MissingCheckpointError) as excinfo:
         manager.get(spec)
 
     assert excinfo.value.missing == [absent]
-    assert spec.build.calls == []
+    assert build.calls == []
 
 
 def test_modelless_spec_not_cached(tmp_path: Path) -> None:
-    spec = FakeProcessorSpec(kind="canny", checkpoints=(), build=RecordingBuild())
+    build = RecordingBuild()
+    spec = FakeProcessorSpec(kind="canny", checkpoints=(), build=build)
     manager = ModelManager(tmp_path, torch.device("cpu"), max_loaded=1)
 
     first = manager.get(spec)
     second = manager.get(spec)
 
     assert first is not second
-    assert len(spec.build.calls) == 2
+    assert len(build.calls) == 2
     assert manager.loaded_detectors == []
 
 

@@ -47,9 +47,11 @@ def test_download_skips_existing(tmp_path: Path) -> None:
     target.write_bytes(b"weights")
     calls: list[dict[str, str]] = []
 
-    result = download_checkpoint(
-        tmp_path, ZOE_CHECKPOINT, download=lambda **kw: calls.append(kw) or ""
-    )
+    def fake_download(**kwargs: str) -> str:
+        calls.append(kwargs)
+        return ""
+
+    result = download_checkpoint(tmp_path, ZOE_CHECKPOINT, download=fake_download)
 
     assert result == target
     assert calls == []

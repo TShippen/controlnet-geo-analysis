@@ -689,7 +689,7 @@ class StatefulDetector:
     """Stand-in for a detector that keeps per-image state between two steps of a run."""
 
     def __init__(self) -> None:
-        self.current: tuple[int, int, int] | None = None
+        self.current: tuple[int, ...] | None = None
 
 
 def make_stateful_spec(kind: str) -> ProcessorSpec:
@@ -707,7 +707,9 @@ def make_stateful_spec(kind: str) -> ProcessorSpec:
         options: AnalysisOptions,
     ) -> AnalysisOutput:
         assert isinstance(detector, StatefulDetector)
-        detector.current = image.getpixel((0, 0))
+        pixel = image.getpixel((0, 0))
+        assert isinstance(pixel, tuple)
+        detector.current = pixel
         time.sleep(0.05)
         return AnalysisOutput(Image.new("RGB", (4, 4), detector.current))
 

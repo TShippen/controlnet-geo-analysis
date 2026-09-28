@@ -226,7 +226,7 @@ async def test_analyze_schema_has_box_and_point(client: Client) -> None:
     properties = tools["analyze_image"].input_schema["properties"]
     assert "fractions" in properties["box"]["description"]
     assert "fractions" in properties["point"]["description"]
-    assert "segments" in tools["analyze_image"].description
+    assert "segments" in await tool_description(client, "analyze_image")
 
 
 def schema_descriptions(schema: object) -> list[str]:
@@ -264,9 +264,12 @@ async def test_schema_descriptions_reach_the_fields_of_a_returned_model(client: 
     """The model-name check reads output fields, which sit in nested definitions."""
     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    descriptions = schema_descriptions(tools["sample_analysis"].output_schema)
+    schema = tools["sample_analysis"].output_schema
+    assert schema is not None
 
-    sample = tools["sample_analysis"].output_schema["$defs"]["Sample"]
+    descriptions = schema_descriptions(schema)
+
+    sample = schema["$defs"]["Sample"]
     assert sample["properties"]["on_boundary"]["description"] in descriptions
 
 
@@ -320,9 +323,11 @@ async def test_error_text_has_no_model_names(client: Client) -> None:
     ]
 
     for result in results:
+        text = result.content[0]
+        assert isinstance(text, TextContent)
         assert result.is_error is True
-        assert model_names_in_test_text(result.content[0].text) == []
-        assert operator_detail_in_test_text(result.content[0].text) == []
+        assert model_names_in_test_text(text.text) == []
+        assert operator_detail_in_test_text(text.text) == []
 
 
 async def test_analyze_schema_has_crop(client: Client) -> None:
@@ -652,7 +657,9 @@ async def test_sample_description_says_depth_steps_are_gradual(client: Client) -
 async def test_sample_schema_says_unflagged_is_not_one_surface(client: Client) -> None:
     tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
-    sample = tools["sample_analysis"].output_schema["$defs"]["Sample"]
+    schema = tools["sample_analysis"].output_schema
+    assert schema is not None
+    sample = schema["$defs"]["Sample"]
     assert "False does not show" in sample["properties"]["on_boundary"]["description"]
 
 
