@@ -161,6 +161,9 @@ async def test_perspective_text_states_its_limits(client: Client) -> None:
     assert "within 3 degrees of that group's vanishing point" in description
     assert "within 2 pixels of the other's line" in description
     assert "placed less precisely than a near one" in description
+    assert "Edges shorter than 20 pixels at the working resolution" in description
+    assert "At most 200 edges are detected" in description
+    assert "0 degrees running to the image right and 90 degrees straight up" in description
 
 
 async def test_line_length_on_perspective_is_error(client: Client) -> None:

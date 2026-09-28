@@ -56,7 +56,12 @@ it is withheld and why: a cropped image has no known optical center, for example
 gets a camera estimate. The grouping is loose by design: an edge joins a group when it points
 within 3 degrees of that group's vanishing point, and edges count as sharing a line when they lie
 within 2 pixels of each other's line, so a group can hold a few edges from another direction and
-closely spaced parallel edges can be chained together. The tool description says so.
+closely spaced parallel edges can be chained together. The tool description says so. The response
+names the groups behind the horizon and the camera estimate and the group taken for the
+verticals, so each can be checked against the image. It gives the distance of the farthest
+vanishing point a camera estimate used, counts the edges that fit no group apart from the edges
+too short to have a direction, and says when the image reached the 200 edges the detector returns
+at most.
 
 `sample_analysis` reads numbers off a `depth` or `normals` map. The agent gives either `points`
 or a `line` with an optional `count` of samples, all in fractions of the full image. The values

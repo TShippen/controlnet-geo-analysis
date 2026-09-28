@@ -93,7 +93,8 @@ def test_short_segments_are_ignored() -> None:
     result = analyze_test_scene(short)
 
     assert result.families == ()
-    assert result.unassigned == 8
+    assert result.unassigned == 0
+    assert result.too_short == 8
 
 
 def test_at_most_three_families() -> None:
@@ -278,6 +279,26 @@ def test_horizon_through_side_points_with_vertical_family() -> None:
     assert isinstance(horizon, Horizon)
     assert horizon.left_y == pytest.approx(0.50, abs=0.005)
     assert horizon.right_y == pytest.approx(0.50, abs=0.005)
+
+
+def test_derived_values_record_the_families_they_came_from() -> None:
+    """The verticals carry the most length and are family 0; the converging sets are 1 and 2."""
+    result = analyze_test_scene(camera_scene_test_segments())
+
+    assert isinstance(result.horizon, Horizon)
+    assert isinstance(result.camera, CameraEstimate)
+    assert result.horizon.vertical_family == 0
+    assert result.horizon.source_families == (1, 2)
+    assert result.camera.source_families == (1, 2)
+    assert result.camera.vertical_family == 0
+
+
+def test_camera_records_how_far_its_farthest_point_lies() -> None:
+    """The right point is 692.8 pixels from the center and the diagonal is 724.1: 0.96."""
+    camera = analyze_test_scene(camera_scene_test_segments()).camera
+
+    assert isinstance(camera, CameraEstimate)
+    assert camera.farthest_point_diagonals == pytest.approx(0.957, abs=0.005)
 
 
 def test_level_horizon_from_one_side_point_names_the_roll_assumption() -> None:

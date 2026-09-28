@@ -52,6 +52,7 @@ from controlnet_mcp.measurements import (
 from controlnet_mcp.perspective import (
     COLLINEAR_PIXELS,
     INLIER_DEGREES,
+    MIN_DIRECTION_PIXELS,
     Horizon,
     analyze_perspective,
 )
@@ -434,7 +435,7 @@ def _run_perspective(
     )
     return AnalysisOutput(
         image=Image.fromarray(canvas),
-        measurement=measure_perspective(result, width, height, region),
+        measurement=measure_perspective(result, width, height, region, DETECTED_EDGE_LIMIT),
     )
 
 
@@ -648,12 +649,20 @@ PROCESSORS: dict[str, ProcessorSpec] = {
             f"reported as sharing one line when each lies within {COLLINEAR_PIXELS:.0f} pixels "
             "of the other's line, so closely spaced parallel edges can be chained together. A "
             "vanishing point far outside the image is placed less precisely than a near one, "
-            "and so is whatever is derived from it. It gives no position, distance, or size."
+            "and so is whatever is derived from it. Edges shorter than "
+            f"{MIN_DIRECTION_PIXELS} pixels at the working resolution have no reliable "
+            "direction and are left out of the groups, and the result counts them apart from "
+            f"the edges that fit no group. At most {DETECTED_EDGE_LIMIT} edges are detected, "
+            "so in a busy image some are missing, and the result says when that limit was "
+            "reached. The direction of a parallel group is given with 0 degrees running to "
+            "the image right and 90 degrees straight up. It gives no position, distance, or "
+            "size."
         ),
         checkpoints=(MLSD_CHECKPOINT,),
         build=_build_lines,
         run=_run_perspective,
         detector="lines",
+        version="2",
     ),
     "segments": ProcessorSpec(
         kind="segments",

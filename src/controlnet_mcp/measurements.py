@@ -217,7 +217,11 @@ def measure_mask(mask: np.ndarray) -> Measurement:
 
 
 def measure_perspective(
-    result: PerspectiveResult, width: int, height: int, region: CropRegion = FULL_IMAGE
+    result: PerspectiveResult,
+    width: int,
+    height: int,
+    region: CropRegion = FULL_IMAGE,
+    edge_limit: int | None = None,
 ) -> Measurement:
     """Report the groups of straight edges and what they support.
 
@@ -225,20 +229,39 @@ def measure_perspective(
     the direction they run parallel, and how many edges it has. The horizon
     and the camera estimate follow, each with what was assumed to derive it,
     or with the reason it was withheld. A vanishing point may lie outside 0
-    to 1, since edges often meet outside the frame. The full form adds each
-    group's scatter and share of edge length, the count of unassigned edges,
-    and the edges that share one line.
+    to 1, since edges often meet outside the frame. Both forms count the edges
+    that fit no group apart from the edges too short to have a direction, say
+    when the image has as many edges as the detector returns at most, and say
+    how a parallel direction is measured when one is reported. The full form
+    adds each group's scatter and share of edge length and the edges that
+    share one line.
 
     Args:
         result: The perspective analysis.
         width: Width in pixels of the frame the analysis was made in.
         height: Height in pixels of that frame.
         region: The part of the reference image that frame was rendered from.
+        edge_limit: The most edges the detector returns for one image, or
+            None when it has no limit.
     """
+    total = (
+        sum(len(family.segment_indices) for family in result.families)
+        + result.unassigned
+        + result.too_short
+    )
+    limited = ""
+    if edge_limit is not None and total >= edge_limit:
+        limited = (
+            f" The image reached the limit of {edge_limit} detected edges, so some of its "
+            "edges are missing from these counts."
+        )
+    leftover = (
+        f"{result.unassigned} edges fit no group, and {result.too_short} are too short to "
+        f"have a direction.{limited}"
+    )
     if not result.families:
         return _both_forms(
-            "No group of straight edges converges or runs parallel; "
-            f"{result.unassigned} straight edges unassigned."
+            f"No group of straight edges converges or runs parallel: {leftover}"
         )
     brief_groups = []
     full_groups = []
@@ -250,13 +273,27 @@ def measure_perspective(
             f"{100.0 * family.length_share:.0f}% of edge length"
         )
     closing = (
-        f"{_horizon_phrase(result.horizon, region)} {_camera_phrase(result.camera)}"
+        f"{leftover} {_horizon_phrase(result.horizon, region)} "
+        f"{_camera_phrase(result.camera)}{_angle_reading(result)}"
     )
     full = (
-        "Perspective: " + "; ".join(full_groups) + f". {result.unassigned} edges unassigned. "
+        "Perspective: " + "; ".join(full_groups) + f". "
         f"{closing}{_shared_lines_phrase(result, width, height, region)}"
     )
     return Measurement(brief="Perspective: " + "; ".join(brief_groups) + f". {closing}", full=full)
+
+
+def _group_name(index: int) -> str:
+    """A group by its number and the color it is drawn in."""
+    return f"group {index + 1} ({GROUP_COLOR_NAMES[index]})"
+
+
+def _group_names(indices: Sequence[int]) -> str:
+    """Several groups by number and color, joined as a phrase."""
+    names = [_group_name(index) for index in indices]
+    if len(names) == 1:
+        return names[0]
+    return ", ".join(names[:-1]) + " and " + names[-1]
 
 
 def _group_phrase(
@@ -270,11 +307,22 @@ def _group_phrase(
         where = f"vanishes at ({x:.2f}, {y:.2f})"
     loose = ", loose fit" if family.scatter_degrees >= LOOSE_FIT_DEGREES else ""
     count = len(family.segment_indices)
-    return f"group {index + 1} ({GROUP_COLOR_NAMES[index]}) {where}, {count} edges{loose}"
+    return f"{_group_name(index)} {where}, {count} edges{loose}"
+
+
+def _angle_reading(result: PerspectiveResult) -> str:
+    """How the direction of a parallel group is measured, with a leading space, or nothing."""
+    if all(family.vanishing_point is not None for family in result.families):
+        return ""
+    return " Parallel directions are given with 0° running to the image right and 90° straight up."
 
 
 def _horizon_phrase(horizon: Horizon | Withheld, region: CropRegion) -> str:
-    """Where the horizon crosses the borders of the full image, or why it is withheld."""
+    """Where the horizon crosses the borders of the full image, or why it is withheld.
+
+    The phrase names the groups the horizon was drawn from and the group
+    taken for the verticals, so the reader can check both against the image.
+    """
     if isinstance(horizon, Withheld):
         return f"Horizon withheld: {horizon.reason}."
     left_x, left_y = region.to_full(0.0, horizon.left_y)
@@ -282,14 +330,22 @@ def _horizon_phrase(horizon: Horizon | Withheld, region: CropRegion) -> str:
     slope = (right_y - left_y) / (right_x - left_x)
     at_left = left_y - slope * left_x
     at_right = left_y + slope * (1.0 - left_x)
+    points = "point" if len(horizon.source_families) == 1 else "points"
     return (
-        f"Horizon crosses the left border at y {at_left:.2f} and the right border at y "
-        f"{at_right:.2f}, assuming {horizon.assumption}."
+        f"Horizon, drawn through the vanishing {points} of "
+        f"{_group_names(horizon.source_families)}, crosses the left border at y {at_left:.2f} "
+        f"and the right border at y {at_right:.2f}, assuming {horizon.assumption}; the "
+        f"near-vertical group is {_group_name(horizon.vertical_family)}."
     )
 
 
 def _camera_phrase(camera: CameraEstimate | Withheld) -> str:
-    """The camera estimate with its assumption, or why it is withheld."""
+    """The camera estimate with its support and assumption, or why it is withheld.
+
+    The phrase names the groups the estimate came from and how far off the
+    farthest vanishing point it used lies, since a far point is placed less
+    precisely and the estimate inherits that.
+    """
     if isinstance(camera, Withheld):
         return f"Camera estimate withheld: {camera.reason}."
     parts = [f"field of view {round(camera.field_of_view_degrees)}° across the width"]
@@ -298,14 +354,23 @@ def _camera_phrase(camera: CameraEstimate | Withheld) -> str:
     if camera.roll_degrees is not None:
         roll = camera.roll_degrees
         parts.append(_signed_phrase(roll, "verticals upright", "verticals lean", "right", "left"))
+    sources = _group_names(camera.source_families)
     if camera.pairs == 1:
-        support = "from 1 pair of converging groups, which nothing checks"
+        support = f"from 1 pair of converging groups, {sources}, which nothing checks"
     else:
         support = (
-            f"from {camera.pairs} pairs of converging groups that agree within "
+            f"from {camera.pairs} pairs among {sources} that agree within "
             f"{math.ceil(100.0 * camera.disagreement)}%"
         )
-    return f"Camera estimate {support}: " + ", ".join(parts) + f", assuming {camera.assumption}."
+    tilt = ""
+    if camera.vertical_family is not None:
+        tilt = f" The tilt is read from {_group_name(camera.vertical_family)}."
+    return (
+        f"Camera estimate {support}: " + ", ".join(parts) + f", assuming {camera.assumption}."
+        f"{tilt} The farthest vanishing point used lies "
+        f"{camera.farthest_point_diagonals:.1f} image diagonals from the image center, and "
+        "the farther a point lies the less precisely it is placed."
+    )
 
 
 def _signed_phrase(degrees: float, zero: str, verb: str, positive: str, negative: str) -> str:

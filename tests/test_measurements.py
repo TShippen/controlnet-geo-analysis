@@ -211,6 +211,7 @@ def perspective_test_result(
     return PerspectiveResult(
         families=families,
         unassigned=0,
+        too_short=0,
         shared_lines=(),
         horizon=NOTHING_WITHHELD,
         camera=camera,
@@ -245,9 +246,80 @@ def test_perspective_brief_reports_the_camera_with_its_assumption() -> None:
 
     brief = measure_perspective(result, 512, 512).brief
 
-    assert "Camera estimate from 1 pair of converging groups, which nothing checks:" in brief
     assert "field of view 65° across the width, level, verticals upright, assuming" in brief
-    assert "Horizon crosses the left border at y 0.50 and the right border at y 0.50" in brief
+
+
+def test_perspective_names_the_groups_behind_each_derived_value() -> None:
+    """In the camera scene the verticals are found first, then the right and left sets.
+
+    The verticals carry the most length, 800 pixels against 704, so they are
+    group 1, and the two converging sets are groups 2 and 3.
+    """
+    result = analyze_perspective(camera_scene_test_segments(), 512, 512, cropped=False)
+
+    brief = measure_perspective(result, 512, 512).brief
+
+    assert (
+        "Horizon, drawn through the vanishing points of group 2 (green) and group 3 (blue), "
+        "crosses the left border at y 0.50 and the right border at y 0.50"
+    ) in brief
+    assert "the near-vertical group is group 1 (red)." in brief
+    assert (
+        "Camera estimate from 1 pair of converging groups, group 2 (green) and group 3 (blue), "
+        "which nothing checks:"
+    ) in brief
+    assert "The tilt is read from group 1 (red)." in brief
+
+
+def test_perspective_gives_the_distance_of_the_farthest_point_used() -> None:
+    """The right point lies 692.8 pixels from the center of a frame whose diagonal is 724.1."""
+    result = analyze_perspective(camera_scene_test_segments(), 512, 512, cropped=False)
+
+    brief = measure_perspective(result, 512, 512).brief
+
+    assert "The farthest vanishing point used lies 1.0 image diagonals from the image" in brief
+    assert "the farther a point lies the less precisely it is placed" in brief
+
+
+def test_perspective_says_how_a_parallel_direction_is_measured() -> None:
+    result = analyze_perspective(camera_scene_test_segments(), 512, 512, cropped=False)
+
+    brief = measure_perspective(result, 512, 512).brief
+
+    assert "with 0° running to the image right and 90° straight up" in brief
+
+
+def test_perspective_without_a_parallel_group_omits_the_angle_reading() -> None:
+    result = perspective_test_result((perspective_test_family((1024.0, 256.0)),))
+
+    assert "Parallel directions" not in measure_perspective(result, 512, 512).brief
+
+
+def test_perspective_counts_short_edges_apart_from_unassigned() -> None:
+    result = dataclasses.replace(
+        perspective_test_result((perspective_test_family((1024.0, 256.0)),)),
+        unassigned=5,
+        too_short=12,
+    )
+
+    brief = measure_perspective(result, 512, 512).brief
+
+    assert "5 edges fit no group, and 12 are too short to have a direction." in brief
+
+
+def test_perspective_says_when_the_edge_limit_was_reached() -> None:
+    """Eight edges in the group, five in none, and twelve too short: 25, against a limit of 25."""
+    result = dataclasses.replace(
+        perspective_test_result((perspective_test_family((1024.0, 256.0)),)),
+        unassigned=5,
+        too_short=12,
+    )
+
+    at_limit = measure_perspective(result, 512, 512, edge_limit=25).brief
+    below_limit = measure_perspective(result, 512, 512, edge_limit=26).brief
+
+    assert "The image reached the limit of 25 detected edges" in at_limit
+    assert "limit" not in below_limit
 
 
 def test_perspective_vanishing_point_maps_through_crop() -> None:
@@ -265,12 +337,11 @@ def test_perspective_horizon_maps_through_crop() -> None:
     The crop spans x 0.5 to 1 of the full image, so the line falls 1.0 per
     unit of full width and crosses the full image's left border at -0.25.
     """
-    result = PerspectiveResult(
-        families=(perspective_test_family((1024.0, 256.0)),),
-        unassigned=0,
-        shared_lines=(),
-        horizon=Horizon(left_y=0.25, right_y=0.75, assumption="a test"),
-        camera=NOTHING_WITHHELD,
+    horizon = Horizon(
+        left_y=0.25, right_y=0.75, vertical_family=0, source_families=(0,), assumption="a test"
+    )
+    result = dataclasses.replace(
+        perspective_test_result((perspective_test_family((1024.0, 256.0)),)), horizon=horizon
     )
 
     brief = measure_perspective(result, 512, 512, CropRegion(0.5, 0.0, 1.0, 1.0)).brief
@@ -297,16 +368,21 @@ def test_perspective_camera_reports_how_well_its_pairs_agree() -> None:
         roll_degrees=None,
         pairs=3,
         disagreement=0.032,
+        source_families=(0, 1, 2),
+        vertical_family=None,
+        farthest_point_diagonals=2.0,
         assumption="a test",
     )
-    result = perspective_test_result((perspective_test_family((1024.0, 256.0)),), camera)
+    families = tuple(perspective_test_family((1024.0, 256.0)) for _ in range(3))
+    result = perspective_test_result(families, camera)
 
     brief = measure_perspective(result, 512, 512).brief
 
     assert (
-        "Camera estimate from 3 pairs of converging groups that agree within 4%: "
-        "field of view 60° across the width, assuming a test."
+        "Camera estimate from 3 pairs among group 1 (red), group 2 (green) and group 3 (blue) "
+        "that agree within 4%: field of view 60° across the width, assuming a test."
     ) in brief
+    assert "The tilt is read from" not in brief
 
 
 def test_perspective_loose_fit_is_named() -> None:
@@ -333,10 +409,13 @@ def test_perspective_full_lists_shared_lines() -> None:
 
 
 def test_perspective_without_families_says_so() -> None:
-    measurement = measure_perspective(perspective_test_result(), 512, 512)
+    result = dataclasses.replace(perspective_test_result(), unassigned=20, too_short=3)
+
+    measurement = measure_perspective(result, 512, 512)
 
     assert measurement.brief == (
-        "No group of straight edges converges or runs parallel; 0 straight edges unassigned."
+        "No group of straight edges converges or runs parallel: 20 edges fit no group, and 3 "
+        "are too short to have a direction."
     )
 
 

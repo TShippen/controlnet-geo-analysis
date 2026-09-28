@@ -106,11 +106,17 @@ class Horizon:
             fraction of the frame height from the top. It may lie outside 0
             to 1.
         right_y: The same at the right border.
+        vertical_family: Index of the family taken for the verticals of the
+            scene.
+        source_families: Indices of the families whose vanishing points the
+            horizon was drawn through.
         assumption: What had to be assumed to place it.
     """
 
     left_y: float
     right_y: float
+    vertical_family: int
+    source_families: tuple[int, ...]
     assumption: str
 
 
@@ -128,6 +134,13 @@ class CameraEstimate:
             pair gives an estimate that nothing checks.
         disagreement: The spread of the focal lengths the pairs gave, as a
             share of their mean. Zero for one pair.
+        source_families: Indices of the converging families the focal length
+            came from.
+        vertical_family: Index of the family the pitch and roll came from, or
+            None when there is none.
+        farthest_point_diagonals: Distance from the image center of the
+            farthest vanishing point used, in image diagonals. The farther a
+            point lies, the less precisely it is placed.
         assumption: What had to be assumed to estimate it.
     """
 
@@ -136,6 +149,9 @@ class CameraEstimate:
     roll_degrees: float | None
     pairs: int
     disagreement: float
+    source_families: tuple[int, ...]
+    vertical_family: int | None
+    farthest_point_diagonals: float
     assumption: str
 
 
@@ -145,8 +161,10 @@ class PerspectiveResult:
 
     Attributes:
         families: The families, the one carrying the most length first.
-        unassigned: How many segments belong to no family, the segments too
-            short to count included.
+        unassigned: How many segments long enough to have a direction belong
+            to no family.
+        too_short: How many segments are shorter than
+            ``MIN_DIRECTION_PIXELS`` and were left out of the grouping.
         shared_lines: Pieces lying on one line, within each family.
         horizon: The horizon, or why it could not be placed.
         camera: The camera estimate, or why it could not be made.
@@ -154,6 +172,7 @@ class PerspectiveResult:
 
     families: tuple[LineFamily, ...]
     unassigned: int
+    too_short: int
     shared_lines: tuple[SharedLine, ...]
     horizon: Horizon | Withheld
     camera: CameraEstimate | Withheld
@@ -180,9 +199,11 @@ def analyze_perspective(
         for index, family in enumerate(families)
         for line in _shared_lines(segments, family, index)
     ]
+    too_short = int((_lengths(segments) < MIN_DIRECTION_PIXELS).sum())
     return PerspectiveResult(
         families=tuple(families),
-        unassigned=len(segments) - assigned,
+        unassigned=len(segments) - assigned - too_short,
+        too_short=too_short,
         shared_lines=tuple(shared),
         horizon=_horizon(families, width, height),
         camera=_camera(families, width, height, cropped),
@@ -418,11 +439,14 @@ def _horizon(families: list[LineFamily], width: int, height: int) -> Horizon | W
             f"no group runs within {VERTICAL_DEGREES:.0f}° of the image vertical, so none can "
             "be taken for the verticals of the scene"
         )
-    points = [
-        family.vanishing_point
-        for family in families
+    upright = families.index(vertical)
+    converging = [
+        (index, family.vanishing_point)
+        for index, family in enumerate(families)
         if family is not vertical and family.vanishing_point is not None
     ]
+    sources = tuple(index for index, _ in converging)
+    points = [point for _, point in converging]
     if len(points) >= 2:
         (x0, y0), (x1, y1) = points[0], points[1]
         if abs(x1 - x0) < 1.0:
@@ -431,6 +455,8 @@ def _horizon(families: list[LineFamily], width: int, height: int) -> Horizon | W
         return Horizon(
             left_y=(y0 - slope * x0) / height,
             right_y=(y0 + slope * (width - x0)) / height,
+            vertical_family=upright,
+            source_families=sources[:2],
             assumption="the near-vertical group is vertical in the scene",
         )
     if len(points) == 1 and vertical.vanishing_point is None:
@@ -438,6 +464,8 @@ def _horizon(families: list[LineFamily], width: int, height: int) -> Horizon | W
         return Horizon(
             left_y=level,
             right_y=level,
+            vertical_family=upright,
+            source_families=sources,
             assumption=(
                 "the near-vertical group is vertical in the scene and the image is not rolled"
             ),
@@ -463,11 +491,10 @@ def _camera(
     if cropped:
         return Withheld("the image is a crop, and the optical center of a crop is unknown")
     center = np.array([width / 2.0, height / 2.0])
-    offsets = [
-        np.array(family.vanishing_point) - center
-        for family in families
-        if family.vanishing_point is not None
-    ]
+    sources = tuple(
+        index for index, family in enumerate(families) if family.vanishing_point is not None
+    )
+    offsets = [np.array(families[index].vanishing_point) - center for index in sources]
     if len(offsets) < 2:
         return Withheld("fewer than two groups converge to a point")
     squares = [
@@ -493,13 +520,18 @@ def _camera(
                 "optical center is taken at the image center, as happens when an image was "
                 "cropped, shifted, or had its verticals straightened"
             )
-    pitch, roll = _pitch_and_roll(_vertical_family(families), center, focal)
+    vertical = _vertical_family(families)
+    pitch, roll = _pitch_and_roll(vertical, center, focal)
+    farthest = max(float(np.linalg.norm(offset)) for offset in offsets)
     return CameraEstimate(
         field_of_view_degrees=math.degrees(2.0 * math.atan(width / (2.0 * focal))),
         pitch_degrees=pitch,
         roll_degrees=roll,
         pairs=len(squares),
         disagreement=disagreement,
+        source_families=sources,
+        vertical_family=families.index(vertical) if vertical is not None else None,
+        farthest_point_diagonals=farthest / math.hypot(width, height),
         assumption=(
             "the groups are perpendicular in the scene, the optical center is the image "
             "center, and the lens projects straight lines as straight"
