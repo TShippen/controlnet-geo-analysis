@@ -53,6 +53,7 @@ from controlnet_mcp.perspective import (
     COLLINEAR_PIXELS,
     INLIER_DEGREES,
     MIN_DIRECTION_PIXELS,
+    VERTICAL_DEGREES,
     Horizon,
     analyze_perspective,
 )
@@ -640,9 +641,14 @@ PROCESSORS: dict[str, ProcessorSpec] = {
             "converge, which edges share one line, and, when the evidence allows, the field of "
             "view and tilt of the camera. It reports groups, not meanings. Which group is "
             "vertical in the scene, and whether the groups are perpendicular, are assumptions, "
-            "and the result names the ones it made. A crop, fewer than two converging groups, "
-            "or groups that contradict being perpendicular withhold the camera estimate, and "
-            "the result gives the reason. Curved or organic subjects produce no groups, and "
+            "and the result names the ones it made. The group taken for the verticals is the "
+            f"one running within {VERTICAL_DEGREES:.0f} degrees of the image vertical whose "
+            "vanishing point lies outside the image, or that stays parallel; a group whose "
+            "vanishing point lies inside the image recedes into the scene and is never taken "
+            "for the verticals, however close its direction runs to vertical. A crop, fewer "
+            "than two converging groups, or groups that contradict being perpendicular "
+            "withhold the camera estimate, and the result gives the reason. Curved or organic "
+            "subjects produce no groups, and "
             "photos with straightened verticals show a parallel group. An edge joins a group "
             f"when it points within {INLIER_DEGREES:.0f} degrees of that group's vanishing "
             "point, so a few edges of a group may belong to another direction. Edges are "
@@ -662,7 +668,7 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         build=_build_lines,
         run=_run_perspective,
         detector="lines",
-        version="2",
+        version="3",
     ),
     "segments": ProcessorSpec(
         kind="segments",

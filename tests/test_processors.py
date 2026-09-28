@@ -206,9 +206,9 @@ def test_lines_run_draws_and_measures_segments(monkeypatch: pytest.MonkeyPatch) 
     assert np.array(output.image)[64, 64].tolist() == [0, 0, 0]
 
 
-def test_perspective_version_is_two() -> None:
-    """The bump retires cached PNGs whose stored text names no groups behind its values."""
-    assert PROCESSORS["perspective"].version == "2"
+def test_perspective_version_is_three() -> None:
+    """The bump retires cached PNGs whose stored text may have picked the wrong vertical group."""
+    assert PROCESSORS["perspective"].version == "3"
 
 
 def test_perspective_shares_the_lines_detector() -> None:

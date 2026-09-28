@@ -316,3 +316,106 @@ def test_horizon_withheld_without_near_vertical_family() -> None:
 
     assert isinstance(horizon, Withheld)
     assert "vertical" in horizon.reason
+
+
+def receding_road_test_segments() -> np.ndarray:
+    """A camera pitched 10 degrees down along a road.
+
+    Sixteen edges recede along the road, converging just above the image
+    center but still inside the frame, at (256, 185.5). Eight edges are the
+    scene's verticals, converging far below the frame at (256, 2524.5). The
+    offsets from the center, -70.5 and 2268.5, have a product of 400
+    squared, the focal length of the scene. Both groups' vanishing points
+    sit on the center column, so both read as dead vertical by bearing
+    alone; only the one outside the frame is the true verticals.
+    """
+    ahead = np.vstack([converging_test_segments((256.0, 185.5))] * 2)
+    verticals = converging_test_segments((256.0, 2524.5))
+    return np.vstack([ahead, verticals])
+
+
+def test_receding_group_is_not_taken_for_the_verticals() -> None:
+    """The group receding along the road is dead vertical by bearing but meets inside the frame."""
+    result = analyze_test_scene(receding_road_test_segments())
+    camera = result.camera
+
+    assert isinstance(camera, CameraEstimate)
+    assert camera.vertical_family is not None
+    vertical = result.families[camera.vertical_family]
+    assert vertical.vanishing_point == pytest.approx((256.0, 2524.5), abs=1.0)
+    assert camera.pitch_degrees == pytest.approx(-10.0, abs=0.5)
+    assert camera.field_of_view_degrees == pytest.approx(65.2, abs=0.5)
+
+
+def test_group_meeting_inside_the_frame_gives_no_tilt() -> None:
+    """Neither group qualifies for the verticals: one meets inside the frame, the other is level."""
+    segments = np.vstack(
+        [converging_test_segments((256.0, 185.5)), converging_test_segments(RIGHT_TEST_POINT)]
+    )
+
+    result = analyze_test_scene(segments)
+
+    assert isinstance(result.horizon, Withheld)
+    assert "outside the frame" in result.horizon.reason
+    if isinstance(result.camera, CameraEstimate):
+        assert result.camera.pitch_degrees is None
+        assert result.camera.roll_degrees is None
+
+
+def test_parallel_verticals_win_over_a_converging_group() -> None:
+    """A parallel group and a converging group both read as dead vertical by bearing.
+
+    The point at (256, -50) meets outside the frame, but a group held
+    exactly parallel is still taken for the verticals over one that only
+    converges. The converging edges here run more than 3 degrees off
+    vertical, so the two families stay distinct.
+    """
+    result = analyze_test_scene(
+        np.vstack([vertical_test_segments(), converging_test_segments((256.0, -50.0))])
+    )
+
+    parallel_index = next(
+        index for index, family in enumerate(result.families) if family.vanishing_point is None
+    )
+    assert isinstance(result.horizon, Horizon)
+    assert result.horizon.vertical_family == parallel_index
+
+
+def test_farthest_point_wins_among_converging_groups() -> None:
+    """Two converging groups both read as dead vertical by bearing and meet outside the frame.
+
+    A camera pitched 30 degrees down, focal length 600. The receding group
+    meets at (256, -90.4), 346.4 pixels above the center, and the verticals
+    meet at (256, 1295.2), 1039.2 pixels below; 346.4 times 1039.2 is 600
+    squared. The receding group carries sixteen edges against the
+    verticals' eight, so length alone would not decide it: the farther
+    point wins because it lies farther from the image center.
+    """
+    ahead = np.vstack([converging_test_segments((256.0, -90.4))] * 2)
+    verticals = converging_test_segments((256.0, 1295.2))
+
+    result = analyze_test_scene(np.vstack([ahead, verticals]))
+    camera = result.camera
+
+    assert isinstance(camera, CameraEstimate)
+    assert camera.vertical_family is not None
+    vertical = result.families[camera.vertical_family]
+    assert vertical.vanishing_point == pytest.approx((256.0, 1295.2), abs=1.0)
+    assert camera.pitch_degrees == pytest.approx(-30.0, abs=0.5)
+    assert camera.field_of_view_degrees == pytest.approx(46.2, abs=0.5)
+
+
+def test_camera_assumption_names_the_verticals_when_tilt_is_given() -> None:
+    camera = analyze_test_scene(receding_road_test_segments()).camera
+
+    assert isinstance(camera, CameraEstimate)
+    assert "vertical in the scene" in camera.assumption
+    assert "less than 45" in camera.assumption
+
+
+def test_camera_assumption_without_verticals_leaves_them_out() -> None:
+    camera = analyze_test_scene(two_point_test_segments()).camera
+
+    assert isinstance(camera, CameraEstimate)
+    assert camera.pitch_degrees is None
+    assert "vertical in the scene" not in camera.assumption

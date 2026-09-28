@@ -58,8 +58,9 @@ MIN_HORIZON_SPAN_PIXELS = 1.0
 # Length of the intersection of two lines, below which they are one line. Lines
 # have unit normals and offsets in pixels, so the intersection of two different
 # lines is at least as long as the sine of the angle between them or, when they
-# are parallel, the pixels between them. Only pieces of one line fall to the
-# rounding error of the arithmetic.
+# are parallel, the pixels between them. The cutoff removes proposals from two
+# segments that lie on exactly one line; pieces of one detected edge that are
+# only nearly in line still propose a point.
 SAME_LINE_LENGTH = 1e-9
 
 
@@ -426,28 +427,59 @@ def _lean_from_vertical(family: LineFamily) -> float:
     return 90.0 - family.direction_degrees % 180.0
 
 
-def _vertical_family(families: list[LineFamily]) -> LineFamily | None:
-    """The family closest to the image vertical, when one is within ``VERTICAL_DEGREES``."""
-    upright = [
-        family for family in families if abs(_lean_from_vertical(family)) <= VERTICAL_DEGREES
-    ]
-    if not upright:
-        return None
-    return min(upright, key=lambda family: abs(_lean_from_vertical(family)))
+def _outside_frame(point: tuple[float, float], width: int, height: int) -> bool:
+    """Whether a point in detection pixels lies outside the frame's borders."""
+    x, y = point
+    return x < 0.0 or x > width or y < 0.0 or y > height
+
+
+def _vertical_family(
+    families: list[LineFamily], width: int, height: int
+) -> LineFamily | None:
+    """The family that stands for the verticals of the scene, if one does.
+
+    A family stands for the verticals when its direction runs within
+    ``VERTICAL_DEGREES`` of the image vertical and it either stays parallel
+    or has its vanishing point outside the frame. A family whose point lies
+    inside the frame recedes into the scene along the ground, not upward,
+    however close its bearing from the image center runs to the vertical.
+    Among several families that qualify, a parallel one wins; otherwise the
+    one whose point lies farthest from the image center wins. That holds for
+    a camera tilted less than 45 degrees from level, where the verticals
+    meet farther from the center than any direction along the ground
+    straight ahead.
+    """
+    center = (width / 2.0, height / 2.0)
+    farthest: LineFamily | None = None
+    farthest_distance = -1.0
+    for family in families:
+        if abs(_lean_from_vertical(family)) > VERTICAL_DEGREES:
+            continue
+        point = family.vanishing_point
+        if point is None:
+            return family
+        if not _outside_frame(point, width, height):
+            continue
+        distance = math.hypot(point[0] - center[0], point[1] - center[1])
+        if distance > farthest_distance:
+            farthest_distance = distance
+            farthest = family
+    return farthest
 
 
 def _horizon(families: list[LineFamily], width: int, height: int) -> Horizon | Withheld:
     """Place the horizon from the families that run along the ground.
 
-    A family near the image vertical is taken for the verticals of the scene,
-    which makes the others horizontal in the scene, and the vanishing points
-    of horizontal directions lie on the horizon.
+    A family taken for the verticals of the scene makes the others
+    horizontal in the scene, and the vanishing points of horizontal
+    directions lie on the horizon.
     """
-    vertical = _vertical_family(families)
+    vertical = _vertical_family(families, width, height)
     if vertical is None:
         return Withheld(
-            f"no group runs within {VERTICAL_DEGREES:.0f}° of the image vertical, so none can "
-            "be taken for the verticals of the scene"
+            f"no group runs within {VERTICAL_DEGREES:.0f}° of the image vertical while meeting "
+            "outside the frame or running parallel, so none can be taken for the verticals of "
+            "the scene"
         )
     upright = families.index(vertical)
     converging = [
@@ -530,9 +562,20 @@ def _camera(
                 "optical center is taken at the image center, as happens when an image was "
                 "cropped, shifted, or had its verticals straightened"
             )
-    vertical = _vertical_family(families)
+    vertical = _vertical_family(families, width, height)
     pitch, roll = _pitch_and_roll(vertical, center, focal)
     farthest = max(float(np.linalg.norm(offset)) for offset in offsets)
+    base_assumption = (
+        "the groups are perpendicular in the scene, the optical center is the image "
+        "center, and the lens projects straight lines as straight"
+    )
+    if vertical is not None:
+        assumption = (
+            f"{base_assumption}; the near-vertical group is vertical in the scene, and the "
+            "camera is tilted less than 45 degrees from level"
+        )
+    else:
+        assumption = base_assumption
     return CameraEstimate(
         field_of_view_degrees=math.degrees(2.0 * math.atan(width / (2.0 * focal))),
         pitch_degrees=pitch,
@@ -542,10 +585,7 @@ def _camera(
         source_families=sources,
         vertical_family=families.index(vertical) if vertical is not None else None,
         farthest_point_diagonals=farthest / math.hypot(width, height),
-        assumption=(
-            "the groups are perpendicular in the scene, the optical center is the image "
-            "center, and the lens projects straight lines as straight"
-        ),
+        assumption=assumption,
     )
 
 

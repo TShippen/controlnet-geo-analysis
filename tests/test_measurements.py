@@ -270,6 +270,14 @@ def test_perspective_brief_reports_the_camera_with_its_assumption() -> None:
     assert "field of view 65° across the width, level, verticals upright, assuming" in brief
 
 
+def test_perspective_camera_text_states_the_tilt_assumption() -> None:
+    result = analyze_perspective(camera_scene_test_segments(), 512, 512, cropped=False)
+
+    brief = measure_perspective(result, 512, 512).brief
+
+    assert "less than 45" in brief
+
+
 def test_perspective_names_the_groups_behind_each_derived_value() -> None:
     """In the camera scene the verticals are found first, then the right and left sets.
 
