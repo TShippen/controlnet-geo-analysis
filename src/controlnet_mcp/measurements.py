@@ -232,8 +232,8 @@ def measure_mask(mask: np.ndarray) -> Measurement:
 
 def measure_perspective(
     result: PerspectiveResult,
-    width: int,
-    height: int,
+    width: float,
+    height: float,
     region: CropRegion = FULL_IMAGE,
     edge_limit: int | None = None,
 ) -> Measurement:
@@ -311,7 +311,7 @@ def _group_names(indices: Sequence[int]) -> str:
 
 
 def _group_phrase(
-    index: int, family: LineFamily, width: int, height: int, region: CropRegion
+    index: int, family: LineFamily, width: float, height: float, region: CropRegion
 ) -> str:
     """One group's color, where it vanishes or how it runs, and its edge count."""
     if family.vanishing_point is None:
@@ -396,7 +396,7 @@ def _signed_phrase(degrees: float, zero: str, verb: str, positive: str, negative
 
 
 def _shared_lines_phrase(
-    result: PerspectiveResult, width: int, height: int, region: CropRegion
+    result: PerspectiveResult, width: float, height: float, region: CropRegion
 ) -> str:
     """The longest lines shared by several edges, with a leading space, or nothing."""
     if not result.shared_lines:
@@ -724,7 +724,7 @@ def _segment_length(segment: Sequence[float]) -> float:
     return math.hypot(x1 - x0, y1 - y0)
 
 
-def _endpoints(segment: Sequence[float], width: int, height: int, region: CropRegion) -> str:
+def _endpoints(segment: Sequence[float], width: float, height: float, region: CropRegion) -> str:
     """Both ends of one segment as coordinate pairs in fractions of the full image."""
     x0, y0, x1, y1 = segment
     start_x, start_y = region.to_full(_normalized(x0, width), _normalized(y0, height))
@@ -732,7 +732,7 @@ def _endpoints(segment: Sequence[float], width: int, height: int, region: CropRe
     return f"({start_x:.2f},{start_y:.2f})-({end_x:.2f},{end_y:.2f})"
 
 
-def _normalized(value: float, extent: int) -> float:
+def _normalized(value: float, extent: float) -> float:
     """One pixel coordinate as a fraction of an image extent, clipped to the frame.
 
     Line detection extrapolates endpoints past the border of the image, so a

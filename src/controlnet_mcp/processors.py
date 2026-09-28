@@ -411,12 +411,22 @@ def _run_perspective(
 
     Each group is drawn in its own color, segments in no group are drawn dark
     gray, and the horizon, when it could be placed, is drawn white across the
-    frame beneath the segments. An image analyzed in part is treated as a
-    crop, which withholds the camera estimate.
+    frame beneath the segments; drawing uses the segments and the canvas as
+    detected. The detection resize can stretch the detected frame relative to
+    the source image, so the segments are put through ``square_pixel_frame``,
+    sized to the source, before they are grouped and measured: angles, the
+    horizon's tilt, and the focal length all assume square pixels. An image
+    analyzed in part is treated as a crop, which withholds the camera
+    estimate.
     """
     del prompt, options
     segments, width, height = detect_line_segments(detector, image, resolution)
-    result = analyze_perspective(segments, width, height, cropped=region != FULL_IMAGE)
+    square_segments, square_width, square_height = square_pixel_frame(
+        segments, width, height, image.width, image.height
+    )
+    result = analyze_perspective(
+        square_segments, square_width, square_height, cropped=region != FULL_IMAGE
+    )
     canvas = np.zeros((height, width, 3), dtype=np.uint8)
     if isinstance(result.horizon, Horizon):
         left = (0, round(result.horizon.left_y * height))
@@ -436,8 +446,41 @@ def _run_perspective(
     )
     return AnalysisOutput(
         image=Image.fromarray(canvas),
-        measurement=measure_perspective(result, width, height, region, DETECTED_EDGE_LIMIT),
+        measurement=measure_perspective(
+            result, square_width, square_height, region, DETECTED_EDGE_LIMIT
+        ),
     )
+
+
+def square_pixel_frame(
+    segments: np.ndarray, width: int, height: int, source_width: int, source_height: int
+) -> tuple[np.ndarray, float, float]:
+    """Scale detected segments so their pixels are square, matching the source image's proportions.
+
+    ``resize_for_detection`` rounds each side of the detection frame to a
+    multiple of 64 independently, so the frame it returns can be stretched
+    relative to the source image it was resized from. The width is kept and
+    the height corrected to what the source's proportions give at that width;
+    scaling every y coordinate by the ratio of that corrected height to the
+    detected height undoes the stretch.
+
+    Args:
+        segments: Endpoint quadruples ``x0, y0, x1, y1`` in the frame
+            ``detect_line_segments`` detected them in, shaped (N, 4).
+        width: Width in pixels of that detection frame.
+        height: Height in pixels of that detection frame.
+        source_width: Width in pixels of the source image the frame was
+            detected from.
+        source_height: Height in pixels of that source image.
+
+    Returns:
+        The segments with y scaled so pixels are square, the width of the
+        square-pixel frame, and its height.
+    """
+    square_height = width * source_height / source_width
+    scaled = np.array(segments, dtype=np.float64).reshape(-1, 4)
+    scaled[:, [1, 3]] *= square_height / height
+    return scaled, float(width), square_height
 
 
 def detect_line_segments(
@@ -668,7 +711,7 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         build=_build_lines,
         run=_run_perspective,
         detector="lines",
-        version="4",
+        version="5",
     ),
     "segments": ProcessorSpec(
         kind="segments",

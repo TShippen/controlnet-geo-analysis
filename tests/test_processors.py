@@ -30,6 +30,7 @@ from controlnet_mcp.processors import (
     UnknownAnalysisError,
     detect_line_segments,
     get_processor,
+    square_pixel_frame,
 )
 from controlnet_mcp.regions import FULL_IMAGE, CropRegion
 from controlnet_mcp.segmentation import RegionPrompt
@@ -206,9 +207,30 @@ def test_lines_run_draws_and_measures_segments(monkeypatch: pytest.MonkeyPatch) 
     assert np.array(output.image)[64, 64].tolist() == [0, 0, 0]
 
 
-def test_perspective_version_is_four() -> None:
-    """The bump retires cached PNGs whose horizon was drawn level instead of by the verticals."""
-    assert PROCESSORS["perspective"].version == "4"
+def test_perspective_version_is_five() -> None:
+    """The bump retires cached PNGs whose angles and focal length assumed square pixels."""
+    assert PROCESSORS["perspective"].version == "5"
+
+
+def test_square_pixel_frame_restores_the_source_proportions() -> None:
+    """A 1000x750 source detected at 704x512 has pixels stretched: its true shape is 704 by 528."""
+    segments = np.array([[0.0, 0.0, 704.0, 512.0]])
+
+    scaled, width, height = square_pixel_frame(segments, 704, 512, 1000, 750)
+
+    assert scaled.tolist() == [[0.0, 0.0, 704.0, 528.0]]
+    assert width == 704.0
+    assert height == 528.0
+
+
+def test_square_pixel_frame_leaves_a_matching_frame_alone() -> None:
+    segments = np.array([[10.0, 20.0, 300.0, 400.0]])
+
+    scaled, width, height = square_pixel_frame(segments, 512, 512, 800, 800)
+
+    assert scaled.tolist() == [[10.0, 20.0, 300.0, 400.0]]
+    assert width == 512.0
+    assert height == 512.0
 
 
 def test_perspective_shares_the_lines_detector() -> None:
@@ -231,6 +253,40 @@ def test_perspective_run_colors_families(monkeypatch: pytest.MonkeyPatch) -> Non
     assert (255, 0, 0) in colors
     assert (0, 255, 0) in colors
     assert "vanishes at" in output.measurement.brief
+
+
+def test_perspective_run_reports_directions_in_square_pixels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Segments true to 45 degrees are handed to the analysis already stretched by detection.
+
+    A 1000x750 source is detected at 704x512, though the source's proportions
+    put its true shape at 704x528: detection compresses y by 512/528. Eight
+    segments that run at 45 degrees in the source's proportions -- x
+    increasing as y decreases, since directions are reported with y upward --
+    are given to the fake detector with that compression already applied to
+    their y span, the way the real detector would return them, so 45 degrees
+    is recovered only if the analysis corrects for the stretch; uncorrected,
+    the same segments read as about 44.1 degrees. Their x anchors are spaced
+    apart so the eight lines are parallel but not collinear.
+    """
+    compress = 512.0 / 528.0
+    segments = np.array(
+        [
+            [100.0 + 70.0 * index, 300.0, 148.0 + 70.0 * index, 300.0 - 48.0 * compress]
+            for index in range(8)
+        ]
+    )
+    monkeypatch.setattr("controlnet_mcp.processors.pred_lines", lambda *args: segments)
+
+    output = run_test_processor(
+        get_processor("perspective"),
+        MLSDdetector(object()),
+        structured_test_image((1000, 750)),
+        512,
+    )
+
+    assert "parallel at 45°" in output.measurement.brief
 
 
 def test_perspective_run_withholds_the_camera_for_a_crop(monkeypatch: pytest.MonkeyPatch) -> None:

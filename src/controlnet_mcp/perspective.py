@@ -7,9 +7,9 @@ families come the pieces of edges that share one line, and, when the evidence
 allows, the horizon and an estimate of the camera. A value the evidence does
 not support is withheld with the reason.
 
-Pixel positions are in the frame the segments were detected in, origin top
-left with y downward. Angles are in degrees with y upward, as they read on
-the page: 0 runs to the image right and 90 runs up.
+Pixel positions are in the frame given to the analysis, which the caller
+makes square, origin top left with y downward. Angles are in degrees with y
+upward, as they read on the page: 0 runs to the image right and 90 runs up.
 """
 
 import math
@@ -70,8 +70,9 @@ class LineFamily:
 
     Attributes:
         segment_indices: Indices into the segments given to the analysis.
-        vanishing_point: Where the family's edges meet, in detection pixels,
-            which may lie outside the frame. None when the family is parallel.
+        vanishing_point: Where the family's edges meet, in the frame given to
+            the analysis, which may lie outside the frame. None when the
+            family is parallel.
         direction_degrees: For a parallel family, the direction its edges run,
             from 0 up to 180. Otherwise the direction of the line from the
             image center toward the vanishing point, above -180 up to 180.
@@ -95,7 +96,7 @@ class SharedLine:
     Attributes:
         family: Index of the family among the result's families.
         segment_indices: Indices into the segments given to the analysis.
-        start: One outer end of the pieces, in detection pixels.
+        start: One outer end of the pieces, in the frame given to the analysis.
         end: The other outer end.
         gaps: The stretches between pieces, each as a pair of positions from 0
             at ``start`` to 1 at ``end``.
@@ -190,17 +191,20 @@ class PerspectiveResult:
 
 
 def analyze_perspective(
-    segments: np.ndarray, width: int, height: int, cropped: bool
+    segments: np.ndarray, width: float, height: float, cropped: bool
 ) -> PerspectiveResult:
     """Group straight segments into families and derive what the families support.
 
     Args:
-        segments: Endpoint quadruples ``x0, y0, x1, y1`` in detection pixels,
-            shaped (N, 4).
-        width: Width in pixels of the frame the segments were detected in.
+        segments: Endpoint quadruples ``x0, y0, x1, y1`` in the frame given
+            to the analysis, shaped (N, 4).
+        width: Width in pixels of the frame given to the analysis, which the
+            caller makes square.
         height: Height in pixels of that frame.
         cropped: Whether the frame is a crop of the image, in which case its
-            center is not the optical center and no camera is estimated.
+            center is not the optical center: no camera is estimated, and,
+            when the verticals converge, no horizon is placed through the
+            single point that is left.
     """
     segments = np.asarray(segments, dtype=np.float64).reshape(-1, 4)
     families = _find_families(segments, width, height)
@@ -225,7 +229,7 @@ def _lengths(segments: np.ndarray) -> np.ndarray:
     return np.hypot(segments[:, 2] - segments[:, 0], segments[:, 3] - segments[:, 1])
 
 
-def _find_families(segments: np.ndarray, width: int, height: int) -> list[LineFamily]:
+def _find_families(segments: np.ndarray, width: float, height: float) -> list[LineFamily]:
     """Find the families one at a time, each among the segments the earlier ones left.
 
     The search is deterministic: the same segments always give the same
@@ -326,8 +330,8 @@ def _family(
     centered: np.ndarray,
     share: float,
     center: np.ndarray,
-    width: int,
-    height: int,
+    width: float,
+    height: float,
 ) -> LineFamily:
     """Describe one family from its segments and the point fitted to them."""
     scatter = float(np.median(_angles_to(point[np.newaxis, :], centered[indices])[0]))
@@ -427,14 +431,14 @@ def _lean_from_vertical(family: LineFamily) -> float:
     return 90.0 - family.direction_degrees % 180.0
 
 
-def _outside_frame(point: tuple[float, float], width: int, height: int) -> bool:
-    """Whether a point in detection pixels lies outside the frame's borders."""
+def _outside_frame(point: tuple[float, float], width: float, height: float) -> bool:
+    """Whether a point in the frame given to the analysis lies outside the frame's borders."""
     x, y = point
     return x < 0.0 or x > width or y < 0.0 or y > height
 
 
 def _vertical_family(
-    families: list[LineFamily], width: int, height: int
+    families: list[LineFamily], width: float, height: float
 ) -> LineFamily | None:
     """The family that stands for the verticals of the scene, if one does.
 
@@ -468,7 +472,7 @@ def _vertical_family(
 
 
 def _horizon(
-    families: list[LineFamily], width: int, height: int, cropped: bool
+    families: list[LineFamily], width: float, height: float, cropped: bool
 ) -> Horizon | Withheld:
     """Place the horizon from the families that run along the ground.
 
@@ -536,7 +540,7 @@ def _horizon(
 
 
 def _camera(
-    families: list[LineFamily], width: int, height: int, cropped: bool
+    families: list[LineFamily], width: float, height: float, cropped: bool
 ) -> CameraEstimate | Withheld:
     """Estimate the camera from vanishing points taken to be of perpendicular directions.
 
