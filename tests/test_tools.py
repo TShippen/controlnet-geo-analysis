@@ -32,7 +32,7 @@ from controlnet_mcp.processors import (
 )
 from controlnet_mcp.regions import CropRegion
 from controlnet_mcp.segmentation import RegionPrompt
-from controlnet_mcp.server import SERVER_INSTRUCTIONS, build_server
+from controlnet_mcp.server import PAIRED_IMAGE_READING, SERVER_INSTRUCTIONS, build_server
 
 pytestmark = pytest.mark.anyio
 
@@ -720,6 +720,53 @@ async def test_compare_brief_says_a_withheld_image_is_two_panels(
     assert isinstance(text, TextContent)
     assert "No edges were paired." in text.text
     assert "side by side" in text.text
+
+
+async def test_compare_brief_says_what_the_paired_image_shows(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """chair.png against itself in a shared frame: paired, so the image is one frame."""
+    fake_test_line_detection(monkeypatch)
+
+    result = await client.call_tool(
+        "compare_images", {"first": "chair.png", "second": "chair.png", "align": "none"}
+    )
+
+    text = result.content[0]
+    assert isinstance(text, TextContent)
+    assert text.text.endswith(PAIRED_IMAGE_READING)
+
+
+async def test_compare_text_gives_both_crops_when_they_differ(
+    client: Client, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0.33 of 64 pixels is not a whole pixel; 0.33 of 100 pixels is."""
+    fake_test_line_detection(monkeypatch)
+    write_test_image(settings.reference_image_dir / "wide.png", size=(100, 50))
+
+    result = await client.call_tool(
+        "compare_images",
+        {"first": "chair.png", "second": "wide.png", "crop": [0, 0, 0.33, 1]},
+    )
+
+    text = result.content[0]
+    assert isinstance(text, TextContent)
+    assert "in the second image" in text.text
+
+
+async def test_compare_text_gives_one_crop_when_they_match(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_test_line_detection(monkeypatch)
+
+    result = await client.call_tool(
+        "compare_images",
+        {"first": "chair.png", "second": "chair.png", "align": "none", "crop": [0, 0, 0.5, 1]},
+    )
+
+    text = result.content[0]
+    assert isinstance(text, TextContent)
+    assert "in the second image" not in text.text
 
 
 async def test_compare_without_the_checkpoint_is_error(client: Client) -> None:

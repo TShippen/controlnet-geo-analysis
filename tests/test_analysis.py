@@ -655,6 +655,22 @@ def test_compare_rejects_files_outside_the_directory(
         service.compare(reference, "../x.png")
 
 
+def test_compare_text_gives_both_crops_when_they_differ(
+    service: AnalysisService, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0.33 of 64 pixels is not a whole pixel; 0.33 of 100 pixels is."""
+    fake_test_line_detection(monkeypatch)
+    write_test_image(settings.reference_image_dir / "narrow.png", size=(64, 32))
+    write_test_image(settings.reference_image_dir / "wide.png", size=(100, 50))
+    crop = CropRegion.from_list([0, 0, 0.33, 1])
+
+    result = service.compare("narrow.png", "wide.png", resolution=64, crop=crop)
+
+    assert result.crop == crop.snapped(64, 32)
+    assert result.second_crop == crop.snapped(100, 50)
+    assert result.crop != result.second_crop
+
+
 def test_compare_off_reports_no_measurement(
     settings: Settings, pair_of_references: tuple[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

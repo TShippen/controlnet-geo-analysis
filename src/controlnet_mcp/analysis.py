@@ -92,7 +92,10 @@ class ComparisonResult:
     frame, or why they were not, and ``paired`` whether edges were paired,
     which decides whether the image shows one frame or two panels. Both hold
     in every measurement mode. ``crop`` is the part of the first image that
-    was compared, aligned to its pixels, or None when the whole images were.
+    was compared, fitted to its pixels, or None when the whole images were.
+    ``second_crop`` is the same part of the second image, fitted to its own
+    pixels; since each image is fitted on its own, it can differ from
+    ``crop`` even though both were cut from the same fractions.
     """
 
     png: bytes
@@ -100,6 +103,7 @@ class ComparisonResult:
     outcome: str
     paired: bool
     crop: CropRegion | None
+    second_crop: CropRegion | None
     align: AlignMode
     resolution: int
 
@@ -401,6 +405,7 @@ class AnalysisService:
             outcome=comparison_outcome(alignment),
             paired=pairing is not None,
             crop=one.snapped,
+            second_crop=other.snapped,
             align=align,
             resolution=resolution,
         )

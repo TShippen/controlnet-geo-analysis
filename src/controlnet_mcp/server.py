@@ -409,30 +409,54 @@ def _sample_analysis_description() -> str:
 def _comparison_text(result: ComparisonResult, first: str, second: str) -> str:
     """The text block returned beside the comparison image.
 
-    It names the two images and the part compared when they were cropped,
-    followed by the measurement. With measurements off there are no numbers,
-    and the text says instead how the images were brought into one frame, or
-    why they were not, and what the image shows, since that outcome decides
-    how the image is to be read. When nothing was paired the image is two
-    panels instead of one frame, and the text says so in every mode.
+    It names the two images and the part of each that was compared when they
+    were cropped, naming both images' crops when the two, each fitted to its
+    own pixels, differ. That is followed by the measurement, or, with
+    measurements off, by how the images were brought into one frame, or why
+    they were not. Either way the text closes with how to read the image:
+    the paired reading when edges were paired, since the image is then one
+    frame, and the side-by-side reading otherwise, since the image is two
+    panels. That reading holds in every measurement mode.
     """
-    cropped = ""
-    if result.crop is not None:
-        region = result.crop
-        cropped = (
-            f", cropped to x {region.x0:.2f} to {region.x1:.2f}, "
-            f"y {region.y0:.2f} to {region.y1:.2f}"
-        )
+    cropped = _comparison_crop_text(result.crop, result.second_crop)
     summary = (
         f"Comparison of {first} with {second}{cropped}, align {result.align}, "
         f"at resolution {result.resolution}."
     )
+    reading = PAIRED_IMAGE_READING if result.paired else SIDE_BY_SIDE_READING
     if not result.measurement:
-        reading = PAIRED_IMAGE_READING if result.paired else SIDE_BY_SIDE_READING
         return f"{summary} {result.outcome} {reading}"
-    if not result.paired:
-        return f"{summary} {result.measurement} {SIDE_BY_SIDE_READING}"
-    return f"{summary} {result.measurement}"
+    return f"{summary} {result.measurement} {reading}"
+
+
+def _comparison_crop_text(crop: CropRegion | None, second_crop: CropRegion | None) -> str:
+    """The crop clause of the comparison summary, empty when the whole images were compared.
+
+    The crop is fitted to whole pixels in each image on its own, so the two
+    fitted crops can differ even when cut from the same fractions. When they
+    do, both are named, at whatever number of decimals first shows them as
+    different; two crops that differ but print identically at two decimals
+    would otherwise read as one repeated, meaningless number.
+    """
+    if crop is None:
+        return ""
+    if second_crop is None or second_crop == crop:
+        return f", cropped to {_format_crop(crop, 2)}"
+    decimals = 2
+    while _format_crop(crop, decimals) == _format_crop(second_crop, decimals):
+        decimals += 1
+    return (
+        f", cropped to {_format_crop(crop, decimals)} in the first image and "
+        f"{_format_crop(second_crop, decimals)} in the second image"
+    )
+
+
+def _format_crop(region: CropRegion, decimals: int) -> str:
+    """One crop's bounds to ``decimals`` places, with no leading comma or clause words."""
+    return (
+        f"x {region.x0:.{decimals}f} to {region.x1:.{decimals}f}, "
+        f"y {region.y0:.{decimals}f} to {region.y1:.{decimals}f}"
+    )
 
 
 def _result_text(result: AnalysisResult, filename: str, mode: MeasurementSetting) -> str:
