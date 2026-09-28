@@ -146,7 +146,8 @@ uv run python -m controlnet_mcp.prepare_models
 
 The command downloads about 1.8 GB into `MODEL_DIR` and is safe to rerun; existing files are
 skipped. `--check` reports what is missing without downloading. If a tool is called before its
-checkpoint is installed, the tool returns an error naming the file and this command.
+checkpoint is installed, the tool returns an error saying that analysis is not available and to
+tell the user; the file and this command are written to the server's log.
 
 On Linux, the CPU build of torch is the default, so a plain `uv sync` and `uv run` stay small. A
 CUDA machine sets `UV_NO_GROUP=cpu`, either in its shell or in the MCP host config's env block, and

@@ -9,7 +9,12 @@ import torch
 from dotenv import dotenv_values
 from PIL import Image
 
-from controlnet_mcp.checkpoints import CheckpointSpec, missing_checkpoints
+from controlnet_mcp.checkpoints import (
+    PREPARE_COMMAND,
+    REQUIRED_CHECKPOINTS,
+    CheckpointSpec,
+    missing_checkpoints,
+)
 from controlnet_mcp.measurements import Measurement
 from controlnet_mcp.processors import (
     PROCESSORS,
@@ -48,6 +53,19 @@ MODEL_TEST_NAMES = (
 def model_names_in_test_text(text: str) -> list[str]:
     """The model and algorithm names that ``text`` gives, in the case they are written in."""
     return [name for name in MODEL_TEST_NAMES if name in text]
+
+
+def operator_detail_in_test_text(text: str) -> list[str]:
+    """The checkpoint file names and the preparation command that ``text`` contains.
+
+    Detail meant for the operator's log, never for the agent-facing text of an
+    error: each entry of ``REQUIRED_CHECKPOINTS``' bare ``filename``, and
+    ``PREPARE_COMMAND``.
+    """
+    found = [spec.filename for spec in REQUIRED_CHECKPOINTS if spec.filename in text]
+    if PREPARE_COMMAND in text:
+        found.append(PREPARE_COMMAND)
+    return found
 
 
 def write_test_image(

@@ -1,6 +1,7 @@
 """Tests for confined reference image access."""
 
 import io
+import logging
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,16 @@ def test_list_skips_unreadable_files(reference_dir: Path) -> None:
     write_test_image(reference_dir / "ok.png")
 
     assert [entry.filename for entry in list_reference_images(reference_dir)] == ["ok.png"]
+
+
+def test_list_skips_an_image_over_the_pixel_limit(
+    reference_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """1024 pixels is over twice a limit of 100, where Pillow raises rather than only warns."""
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100)
+    write_test_image(reference_dir / "huge.png", size=(32, 32))
+
+    assert list_reference_images(reference_dir) == []
 
 
 def test_resolve_rejects_traversal(reference_dir: Path, tmp_path: Path) -> None:
@@ -122,6 +133,27 @@ def test_decode_reference_image_converts_to_rgb(reference_dir: Path) -> None:
 def test_decode_reference_image_rejects_garbage() -> None:
     with pytest.raises(ReferenceImageError):
         decode_reference_image(b"not an image", "bad.png")
+
+
+def test_decode_refuses_an_image_over_the_pixel_limit(
+    reference_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100)
+    path = write_test_image(reference_dir / "huge.png", size=(32, 32))
+
+    with pytest.raises(ReferenceImageError):
+        decode_reference_image(path.read_bytes(), "huge.png")
+
+
+def test_decode_failure_logs_its_cause(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="controlnet_mcp.images"):
+        with pytest.raises(ReferenceImageError):
+            decode_reference_image(b"not an image", "bad.png")
+
+    records = [record for record in caplog.records if record.name == "controlnet_mcp.images"]
+    assert any(
+        record.levelno == logging.WARNING and record.exc_info is not None for record in records
+    )
 
 
 def test_image_to_png_bytes_roundtrip() -> None:

@@ -71,7 +71,10 @@ def resolve_reference_path(directory: Path, filename: str) -> Path:
             + ", ".join(sorted(SUPPORTED_EXTENSIONS))
         )
     if not resolved.exists():
-        raise ReferenceImageError(f"Reference image {filename!r} does not exist.")
+        raise ReferenceImageError(
+            f"Reference image {filename!r} does not exist. Use list_reference_images to see "
+            "the names."
+        )
     if not resolved.is_file():
         raise ReferenceImageError(f"Reference image {filename!r} is not a regular file.")
     return resolved
@@ -82,7 +85,8 @@ def list_reference_images(directory: Path) -> list[ReferenceImageInfo]:
 
     An entry is listed only when ``resolve_reference_path`` would accept its
     name, so the listing and the fetch apply one rule. Files that Pillow
-    cannot identify are skipped with a warning.
+    cannot identify, or that Pillow refuses to open as too large to decode
+    safely, are skipped with a warning.
     """
     entries: list[ReferenceImageInfo] = []
     for path in sorted(directory.iterdir(), key=lambda item: item.name):
@@ -100,7 +104,7 @@ def list_reference_images(directory: Path) -> list[ReferenceImageInfo]:
                         format=image.format or path.suffix.lstrip(".").upper(),
                     )
                 )
-        except (UnidentifiedImageError, OSError):
+        except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
             logger.warning("Skipping unreadable reference image %s", path.name)
     return entries
 
@@ -119,12 +123,19 @@ def decode_reference_image(data: bytes, filename: str) -> Image.Image:
         filename: Used only to name the image in the error message.
 
     Raises:
-        ReferenceImageError: When the bytes are not a decodable image.
+        ReferenceImageError: When the bytes are not a decodable image, or the
+            image is too large for Pillow to decode safely.
     """
     try:
         with Image.open(io.BytesIO(data)) as image:
             return image.convert("RGB")
+    except Image.DecompressionBombError as exc:
+        logger.warning("Refusing to decode oversized reference image %s", filename, exc_info=exc)
+        raise ReferenceImageError(
+            f"Reference image {filename!r} is too large to decode. Choose another image."
+        ) from exc
     except (UnidentifiedImageError, OSError) as exc:
+        logger.warning("Could not decode reference image %s", filename, exc_info=exc)
         raise ReferenceImageError(f"Reference image {filename!r} could not be decoded.") from exc
 
 

@@ -1,7 +1,9 @@
 """In-process tests of the MCP tools: discovery, image content, and error behavior."""
 
 import base64
-from collections.abc import AsyncIterator
+import logging
+import shutil
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -15,13 +17,14 @@ from conftest import (
     SAMPLE_MEASUREMENT,
     fake_test_line_detection,
     model_names_in_test_text,
+    operator_detail_in_test_text,
     sampled_test_spec,
     write_test_image,
 )
-from controlnet_mcp.analysis import AnalysisService
+from controlnet_mcp.analysis import AnalysisResult, AnalysisService
 from controlnet_mcp.cache import AnalysisCache
 from controlnet_mcp.config import MeasurementSetting, Settings
-from controlnet_mcp.model_manager import ModelManager
+from controlnet_mcp.model_manager import MissingCheckpointError, ModelManager
 from controlnet_mcp.processors import (
     PROCESSORS,
     SAMPLED_KINDS,
@@ -31,7 +34,12 @@ from controlnet_mcp.processors import (
 )
 from controlnet_mcp.regions import CropRegion
 from controlnet_mcp.segmentation import RegionPrompt
-from controlnet_mcp.server import PAIRED_IMAGE_READING, SERVER_INSTRUCTIONS, build_server
+from controlnet_mcp.server import (
+    PAIRED_IMAGE_READING,
+    SERVER_FAULT_TEXT,
+    SERVER_INSTRUCTIONS,
+    build_server,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -109,6 +117,27 @@ def fake_segments_spec() -> ProcessorSpec:
         run=run,
         accepts_prompt=True,
     )
+
+
+_AnalyzeMethod = Callable[
+    [str, str, int | None, RegionPrompt | None, CropRegion | None, AnalysisOptions], AnalysisResult
+]
+
+
+def _failing_analyze(cause: str) -> _AnalyzeMethod:
+    """An ``AnalysisService.analyze`` replacement that always raises ``RuntimeError(cause)``."""
+
+    def broken(
+        filename: str,
+        kind: str,
+        resolution: int | None,
+        prompt: RegionPrompt | None,
+        crop: CropRegion | None,
+        options: AnalysisOptions,
+    ) -> AnalysisResult:
+        raise RuntimeError(cause)
+
+    return broken
 
 
 async def test_lists_tools_with_schemas(client: Client) -> None:
@@ -240,12 +269,13 @@ async def test_comparison_result_text_has_no_model_names(
 
 
 async def test_error_text_has_no_model_names(client: Client) -> None:
-    """Errors over what was asked for. A missing checkpoint is apart: its error names the file."""
+    """Errors over what was asked for, and one refused by argument validation, name no detail."""
     results = [
         await client.call_tool(
             "analyze_image",
             {"filename": "chair.png", "analysis": "perspective", "line_length": "long"},
         ),
+        await client.call_tool("analyze_image", {"filename": "chair.png", "analysis": "pose"}),
         await client.call_tool(
             "compare_images", {"first": "chair.png", "second": "table.jpg", "align": "none"}
         ),
@@ -258,6 +288,7 @@ async def test_error_text_has_no_model_names(client: Client) -> None:
     for result in results:
         assert result.is_error is True
         assert model_names_in_test_text(result.content[0].text) == []
+        assert operator_detail_in_test_text(result.content[0].text) == []
 
 
 async def test_analyze_schema_has_crop(client: Client) -> None:
@@ -756,12 +787,122 @@ async def test_compare_text_gives_one_crop_when_they_match(
     assert "in the second image" not in text.text
 
 
-async def test_compare_without_the_checkpoint_is_error(client: Client) -> None:
-    result = await client.call_tool(
-        "compare_images", {"first": "chair.png", "second": "chair.png"}
+async def test_missing_checkpoint_text_is_for_the_agent(client: Client) -> None:
+    """Three calls whose processor needs a checkpoint the fast suite's empty model dir lacks."""
+    results = [
+        await client.call_tool("analyze_image", {"filename": "chair.png", "analysis": "depth"}),
+        await client.call_tool(
+            "sample_analysis",
+            {"filename": "chair.png", "analysis": "depth", "points": [[0.5, 0.5]]},
+        ),
+        await client.call_tool(
+            "compare_images", {"first": "chair.png", "second": "chair.png"}
+        ),
+    ]
+
+    for result in results:
+        text = result.content[0]
+        assert isinstance(text, TextContent)
+        assert result.is_error is True
+        assert operator_detail_in_test_text(text.text) == []
+        assert model_names_in_test_text(text.text) == []
+        assert SERVER_FAULT_TEXT not in text.text
+
+
+async def test_missing_checkpoint_is_logged(
+    client: Client, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.ERROR, logger="controlnet_mcp.server"):
+        await client.call_tool("analyze_image", {"filename": "chair.png", "analysis": "depth"})
+
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "controlnet_mcp.server" and record.levelno == logging.ERROR
+    ]
+    assert any(
+        record.exc_info is not None and isinstance(record.exc_info[1], MissingCheckpointError)
+        for record in records
     )
 
+
+async def test_unexpected_failure_text_is_for_the_agent(
+    client: Client, service: AnalysisService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cause = "ZoeD_M12_N.pt at /srv/models"
+    monkeypatch.setattr(service, "analyze", _failing_analyze(cause))
+
+    result = await client.call_tool(
+        "analyze_image", {"filename": "chair.png", "analysis": "canny"}
+    )
+
+    text = result.content[0]
+    assert isinstance(text, TextContent)
     assert result.is_error is True
+    assert SERVER_FAULT_TEXT in text.text
+    assert cause not in text.text
+
+
+async def test_unexpected_failure_is_logged(
+    client: Client,
+    service: AnalysisService,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    cause = "ZoeD_M12_N.pt at /srv/models"
+    monkeypatch.setattr(service, "analyze", _failing_analyze(cause))
+
+    with caplog.at_level(logging.ERROR, logger="controlnet_mcp.server"):
+        await client.call_tool("analyze_image", {"filename": "chair.png", "analysis": "canny"})
+
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "controlnet_mcp.server" and record.levelno == logging.ERROR
+    ]
+    assert any(
+        record.exc_info is not None and isinstance(record.exc_info[1], RuntimeError)
+        for record in records
+    )
+
+
+async def test_failure_building_the_result_is_a_server_fault(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """canny needs no checkpoint, so the call reaches the code that builds the result."""
+    cause = "ZoeD_M12_N.pt at /srv/models"
+
+    def broken(result: AnalysisResult, filename: str, mode: MeasurementSetting) -> str:
+        raise RuntimeError(cause)
+
+    monkeypatch.setattr("controlnet_mcp.server._result_text", broken)
+
+    result = await client.call_tool("analyze_image", {"filename": "chair.png", "analysis": "canny"})
+
+    text = result.content[0]
+    assert isinstance(text, TextContent)
+    assert result.is_error is True
+    assert SERVER_FAULT_TEXT in text.text
+    assert cause not in text.text
+
+
+async def test_list_without_the_directory_is_a_server_fault(
+    client: Client, settings: Settings
+) -> None:
+    shutil.rmtree(settings.reference_image_dir)
+
+    result = await client.call_tool("list_reference_images", {})
+
+    text = result.content[0]
+    assert isinstance(text, TextContent)
+    assert result.is_error is True
+    assert SERVER_FAULT_TEXT in text.text
+
+
+def test_operator_detail_helper_finds_a_checkpoint_name() -> None:
+    assert operator_detail_in_test_text("annotators/mlsd_large_512_fp32.pth") == [
+        "mlsd_large_512_fp32.pth"
+    ]
 
 
 async def test_analyze_unknown_kind_is_error(client: Client) -> None:
@@ -774,12 +915,6 @@ async def test_analyze_resolution_out_of_range_is_error(client: Client) -> None:
     result = await client.call_tool(
         "analyze_image", {"filename": "chair.png", "analysis": "canny", "resolution": 32}
     )
-
-    assert result.is_error is True
-
-
-async def test_analyze_missing_checkpoint_is_error(client: Client) -> None:
-    result = await client.call_tool("analyze_image", {"filename": "chair.png", "analysis": "depth"})
 
     assert result.is_error is True
 

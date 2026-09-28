@@ -218,8 +218,7 @@ def identity_alignment(
         raise ComparisonError(
             "The images have different proportions "
             f"({first_source[0]}x{first_source[1]} and {second_source[0]}x{second_source[1]}), "
-            "so they do not share one frame. Use align fit, or crop them to the same "
-            "proportions."
+            "so they do not share one frame. Use align fit."
         )
     scale = np.diag([first_size[0] / second_size[0], first_size[1] / second_size[1], 1.0])
     return Alignment(

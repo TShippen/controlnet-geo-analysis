@@ -109,8 +109,41 @@ _EXPECTED_ERRORS = (
     OptionError,
     SamplingError,
     ComparisonError,
-    MissingCheckpointError,
 )
+
+SERVER_FAULT_TEXT = (
+    "The server failed while handling this call, and the cause is written to the server's log. "
+    "Tell the user. Other images or analyses may still work."
+)
+
+
+def _unavailable(subject: str, exc: MissingCheckpointError) -> ToolError:
+    """The agent-facing error for an analysis whose checkpoint is not installed.
+
+    Logs the checkpoint files and preparation command carried by ``exc`` at
+    ERROR, since the text returned to the agent below names neither.
+    """
+    logger.error("%s: required checkpoint files are not installed", subject, exc_info=exc)
+    if subject == "Comparing images":
+        next_step = "Tell the user that the server's files need to be prepared."
+    else:
+        next_step = (
+            "Use another analysis, or tell the user that the server's files need to be prepared."
+        )
+    return ToolError(
+        f"{subject} is not available on this server, because files the server needs are not "
+        f"installed. No change to the call will fix this. {next_step}"
+    )
+
+
+def _server_fault(tool: str, exc: Exception) -> ToolError:
+    """The agent-facing error for a failure the tool did not anticipate.
+
+    Logs the exception and its traceback at ERROR, since ``SERVER_FAULT_TEXT``
+    carries no detail of the cause.
+    """
+    logger.error("Unexpected failure in %s", tool, exc_info=exc)
+    return ToolError(SERVER_FAULT_TEXT)
 
 
 def build_server(service: AnalysisService) -> MCPServer:
@@ -135,7 +168,10 @@ def build_server(service: AnalysisService) -> MCPServer:
 
         Returns each file's name, width, height, and format.
         """
-        return images.list_reference_images(service.settings.reference_image_dir)
+        try:
+            return images.list_reference_images(service.settings.reference_image_dir)
+        except Exception as exc:
+            raise _server_fault("list_reference_images", exc) from exc
 
     @mcp.tool(annotations=read_only)
     def get_reference_image(
@@ -148,9 +184,11 @@ def build_server(service: AnalysisService) -> MCPServer:
         """
         try:
             data, mime = images.read_reference_bytes(service.settings.reference_image_dir, filename)
+            return Image(data=data, format=mime.removeprefix("image/"))
         except ReferenceImageError as exc:
             raise ToolError(str(exc)) from exc
-        return Image(data=data, format=mime.removeprefix("image/"))
+        except Exception as exc:
+            raise _server_fault("get_reference_image", exc) from exc
 
     @mcp.tool(annotations=read_only, description=_analyze_image_description(measurement_mode))
     def analyze_image(
@@ -234,10 +272,14 @@ def build_server(service: AnalysisService) -> MCPServer:
             region = CropRegion.from_list(crop) if crop is not None else None
             options = AnalysisOptions(line_length=line_length)
             result = service.analyze(filename, analysis, resolution, prompt, region, options)
+            text = _result_text(result, filename, measurement_mode)
+            return [text, Image(data=result.png, format="png")]
+        except MissingCheckpointError as exc:
+            raise _unavailable(f"The {analysis} analysis", exc) from exc
         except _EXPECTED_ERRORS as exc:
             raise ToolError(str(exc)) from exc
-        text = _result_text(result, filename, measurement_mode)
-        return [text, Image(data=result.png, format="png")]
+        except Exception as exc:
+            raise _server_fault("analyze_image", exc) from exc
 
     @mcp.tool(annotations=read_only, description=_sample_analysis_description())
     def sample_analysis(
@@ -302,8 +344,12 @@ def build_server(service: AnalysisService) -> MCPServer:
             ends = parse_line(line) if line is not None else None
             region = CropRegion.from_list(crop) if crop is not None else None
             return service.sample(filename, analysis, positions, ends, count, resolution, region)
+        except MissingCheckpointError as exc:
+            raise _unavailable(f"The {analysis} analysis", exc) from exc
         except _EXPECTED_ERRORS as exc:
             raise ToolError(str(exc)) from exc
+        except Exception as exc:
+            raise _server_fault("sample_analysis", exc) from exc
 
     @mcp.tool(annotations=read_only, description=COMPARISON_DESCRIPTION)
     def compare_images(
@@ -352,10 +398,14 @@ def build_server(service: AnalysisService) -> MCPServer:
         try:
             region = CropRegion.from_list(crop) if crop is not None else None
             result = service.compare(first, second, align, resolution, region)
+            text = _comparison_text(result, first, second)
+            return [text, Image(data=result.png, format="png")]
+        except MissingCheckpointError as exc:
+            raise _unavailable("Comparing images", exc) from exc
         except _EXPECTED_ERRORS as exc:
             raise ToolError(str(exc)) from exc
-        text = _comparison_text(result, first, second)
-        return [text, Image(data=result.png, format="png")]
+        except Exception as exc:
+            raise _server_fault("compare_images", exc) from exc
 
     return mcp
 
