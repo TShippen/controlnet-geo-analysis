@@ -524,6 +524,8 @@ def _result_text(result: AnalysisResult, filename: str, mode: MeasurementSetting
     Either way it says which part of the image was analyzed when it was cropped.
     The size it gives is that of the returned image, which is rendered at the
     working resolution and so differs from the size of the reference file.
+    The text closes with the analysis's reading limits, when it states any,
+    in every measurement mode.
     """
     cropped = ""
     if result.crop is not None:
@@ -537,12 +539,12 @@ def _result_text(result: AnalysisResult, filename: str, mode: MeasurementSetting
         f"{result.width}x{result.height} image"
     )
     if mode == "off":
-        return f"{subject}. {result.description}"
-    cached = ", from cache" if result.from_cache else ""
-    summary = f"{subject} at resolution {result.resolution}{cached}."
-    if not result.measurement:
-        return summary
-    return f"{summary} {result.measurement}"
+        parts = [f"{subject}.", result.description, result.reading_limits]
+    else:
+        cached = ", from cache" if result.from_cache else ""
+        summary = f"{subject} at resolution {result.resolution}{cached}."
+        parts = [summary, result.measurement, result.reading_limits]
+    return " ".join(part for part in parts if part)
 
 
 def main() -> None:

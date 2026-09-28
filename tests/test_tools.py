@@ -5,6 +5,7 @@ import logging
 import shutil
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -170,16 +171,44 @@ async def test_perspective_text_names_its_assumptions(client: Client) -> None:
     assert "It gives no position, distance, or size." in description
 
 
-async def test_perspective_text_states_its_limits(client: Client) -> None:
-    """The description says how loosely edges are grouped and joined, and what a far point costs."""
+async def test_perspective_description_gives_the_edge_limit(client: Client) -> None:
     description = await tool_description(client, "analyze_image")
 
-    assert "within 3 degrees of that group's vanishing point" in description
-    assert "within 2 pixels of the other's line" in description
-    assert "placed less precisely than a near one" in description
-    assert "Edges shorter than 20 pixels at the working resolution" in description
     assert "At most 200 edges are detected" in description
-    assert "0 degrees running to the image right and 90 degrees straight up" in description
+
+
+def test_perspective_reading_limits_state_how_loose_the_grouping_is() -> None:
+    """How loosely edges are grouped and joined, and what a far point costs."""
+    limits = PROCESSORS["perspective"].reading_limits
+
+    assert "within 3 degrees of that group's vanishing point" in limits
+    assert "within 2 pixels of the other's line" in limits
+    assert "placed less precisely than a near one" in limits
+    assert "Edges shorter than 20 pixels at the working resolution" in limits
+    assert "within 10 degrees of the image vertical" in limits
+
+
+async def test_reading_limits_stay_out_of_the_tool_description(client: Client) -> None:
+    description = await tool_description(client, "analyze_image")
+
+    assert PROCESSORS["perspective"].reading_limits not in description
+
+
+async def test_result_text_carries_reading_limits_in_every_mode(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    limited = replace(PROCESSORS["canny"], reading_limits="Fake limits.")
+    monkeypatch.setitem(PROCESSORS, "canny", limited)
+
+    for mode in ("off", "brief", "full"):
+        async with client_measuring(settings, mode) as client:
+            result = await client.call_tool(
+                "analyze_image", {"filename": "chair.png", "analysis": "canny", "resolution": 64}
+            )
+
+        text = result.content[0]
+        assert isinstance(text, TextContent)
+        assert text.text.endswith("Fake limits."), mode
 
 
 async def test_line_length_on_perspective_is_error(client: Client) -> None:
@@ -216,7 +245,12 @@ def schema_descriptions(schema: object) -> list[str]:
 async def test_agent_facing_text_has_no_model_names(client: Client) -> None:
     texts = [SERVER_INSTRUCTIONS]
     for spec in PROCESSORS.values():
-        texts += [spec.description, spec.use_when, spec.values_description or ""]
+        texts += [
+            spec.description,
+            spec.use_when,
+            spec.values_description or "",
+            spec.reading_limits,
+        ]
     for tool in (await client.list_tools()).tools:
         texts.append(tool.description or "")
         texts += schema_descriptions(tool.input_schema)

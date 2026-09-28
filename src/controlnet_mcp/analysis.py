@@ -68,7 +68,9 @@ class AnalysisResult:
     ``measurement`` holds the form of the output's measurement that the
     settings select, and is empty when measurements are switched off. ``crop``
     is the part of the reference that was analyzed, aligned to its pixels, or
-    None when the whole image was.
+    None when the whole image was. ``reading_limits`` says how loosely the
+    analysis decides what it reports, and is empty for an analysis that states
+    none.
     """
 
     kind: str
@@ -80,6 +82,7 @@ class AnalysisResult:
     description: str
     measurement: str
     crop: CropRegion | None = None
+    reading_limits: str = ""
 
 
 @dataclass(frozen=True)
@@ -218,6 +221,7 @@ class AnalysisService:
                 ),
                 measurement=self._selected_form(usable.measurement),
                 crop=snapped,
+                reading_limits=spec.reading_limits,
             )
         if cached is not None:
             logger.warning(
@@ -249,6 +253,7 @@ class AnalysisService:
             description=f"{spec.description} Detection resolution {resolution}.",
             measurement=self._selected_form(output.measurement),
             crop=snapped,
+            reading_limits=spec.reading_limits,
         )
 
     def sample(

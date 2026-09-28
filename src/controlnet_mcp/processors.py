@@ -151,6 +151,10 @@ class ProcessorSpec:
             off. Never names a model.
         use_when: Which modeling step the analysis serves and when to skip
             it. Part of the tool description only, so results stay short.
+        reading_limits: How loosely the analysis decides what it reports, for
+            reading one result. Part of every result text and never of the
+            tool description, so it never names a model. Empty when the
+            analysis has none to state.
         checkpoints: The checkpoint files the detector loads, empty when the
             detector is purely algorithmic.
         build: Constructs the detector from the model directory and moves it
@@ -199,6 +203,7 @@ class ProcessorSpec:
     read_values: Callable[[np.ndarray], ValueMap] | None = None
     values_description: str = ""
     detector: str | None = None
+    reading_limits: str = ""
 
     @property
     def detector_key(self) -> str:
@@ -684,28 +689,27 @@ PROCESSORS: dict[str, ProcessorSpec] = {
             "converge, which edges share one line, and, when the evidence allows, the field of "
             "view and tilt of the camera. It reports groups, not meanings. Which group is "
             "vertical in the scene, and whether the groups are perpendicular, are assumptions, "
-            "and the result names the ones it made. The group taken for the verticals is the "
-            f"one running within {VERTICAL_DEGREES:.0f} degrees of the image vertical that "
-            "either runs parallel or has its vanishing point outside the image; a group whose "
-            "vanishing point lies inside the image recedes into the scene and is never taken "
-            "for the verticals, however close its direction runs to vertical. A crop, fewer "
-            "than two converging groups, or groups that contradict being perpendicular "
-            "withhold the camera estimate, and the result gives the reason. Curved or organic "
-            "subjects produce no groups, and "
-            "photos with straightened verticals show a parallel group. An edge joins a group "
-            f"when it points within {INLIER_DEGREES:.0f} degrees of that group's vanishing "
-            "point, so a few edges of a group may belong to another direction. Edges are "
-            f"reported as sharing one line when each lies within {COLLINEAR_PIXELS:.0f} pixels "
-            "of the other's line, so closely spaced parallel edges can be chained together. A "
-            "vanishing point far outside the image is placed less precisely than a near one, "
-            "and so is whatever is derived from it. Edges shorter than "
-            f"{MIN_DIRECTION_PIXELS} pixels at the working resolution have no reliable "
-            "direction and are left out of the groups, and the result counts them apart from "
-            f"the edges that fit no group. At most {DETECTED_EDGE_LIMIT} edges are detected, "
-            "so in a busy image some are missing, and the result says when that limit was "
-            "reached. The direction of a parallel group is given with 0 degrees running to "
-            "the image right and 90 degrees straight up. It gives no position, distance, or "
-            "size."
+            "and the result names the ones it made. A crop, fewer than two converging groups, "
+            "or groups that contradict being perpendicular withhold the camera estimate, and "
+            "the result gives the reason. Curved or organic subjects produce no groups, and "
+            "photos with straightened verticals show a parallel group. At most "
+            f"{DETECTED_EDGE_LIMIT} edges are detected, so in a busy image some are missing, "
+            "and the result says when that limit was reached. The grouping is loose, and each "
+            "result states how loose. It gives no position, distance, or size."
+        ),
+        reading_limits=(
+            f"An edge joins a group when it points within {INLIER_DEGREES:.0f} degrees of that "
+            "group's vanishing point, so a few edges of a group may belong to another "
+            f"direction. Edges shorter than {MIN_DIRECTION_PIXELS} pixels at the working "
+            "resolution have no reliable direction and are left out of the groups. The group "
+            f"taken for the verticals is the one running within {VERTICAL_DEGREES:.0f} degrees "
+            "of the image vertical that either runs parallel or has its vanishing point "
+            "outside the image; a group whose vanishing point lies inside the image recedes "
+            "into the scene and is never taken for the verticals, however close its direction "
+            "runs to vertical. A vanishing point far outside the image is placed less "
+            "precisely than a near one, and so is whatever is derived from it. Where edges are "
+            f"reported as sharing one line, each lies within {COLLINEAR_PIXELS:.0f} pixels of "
+            "the other's line, so closely spaced parallel edges can be chained together."
         ),
         checkpoints=(MLSD_CHECKPOINT,),
         build=_build_lines,
