@@ -171,7 +171,10 @@ def build_server(service: AnalysisService) -> MCPServer:
     def list_reference_images() -> list[ReferenceImageInfo]:
         """List the reference images you can view and analyze.
 
-        Returns each file's name, width, height, and format.
+        Returns each file's name, width, height, and format. A file in a
+        format this server does not read, or one that cannot be read as an
+        image, is left out. An empty list means the reference image directory
+        holds no image this server can use; tell the user to add one.
         """
         try:
             return images.list_reference_images(service.settings.reference_image_dir)
