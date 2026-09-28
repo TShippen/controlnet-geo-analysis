@@ -478,7 +478,7 @@ def _comparison_text(result: ComparisonResult, first: str, second: str) -> str:
     cropped = _comparison_crop_text(result.crop, result.second_crop)
     summary = (
         f"Comparison of {first} with {second}{cropped}, align {result.align}, "
-        f"at resolution {result.resolution}."
+        f"at working resolution {result.resolution}."
     )
     reading = PAIRED_IMAGE_READING if result.paired else SIDE_BY_SIDE_READING
     if not result.measurement:
@@ -542,7 +542,7 @@ def _result_text(result: AnalysisResult, filename: str, mode: MeasurementSetting
         parts = [f"{subject}.", result.description, result.reading_limits]
     else:
         cached = ", from cache" if result.from_cache else ""
-        summary = f"{subject} at resolution {result.resolution}{cached}."
+        summary = f"{subject} at working resolution {result.resolution}{cached}."
         parts = [summary, result.measurement, result.reading_limits]
     return " ".join(part for part in parts if part)
 

@@ -217,7 +217,7 @@ class AnalysisService:
                 width=usable.width,
                 height=usable.height,
                 description=(
-                    f"{spec.description} Detection resolution {resolution}. Served from cache."
+                    f"{spec.description} Working resolution {resolution}. Served from cache."
                 ),
                 measurement=self._selected_form(usable.measurement),
                 crop=snapped,
@@ -250,7 +250,7 @@ class AnalysisService:
             from_cache=False,
             width=output.image.width,
             height=output.image.height,
-            description=f"{spec.description} Detection resolution {resolution}.",
+            description=f"{spec.description} Working resolution {resolution}.",
             measurement=self._selected_form(output.measurement),
             crop=snapped,
             reading_limits=spec.reading_limits,

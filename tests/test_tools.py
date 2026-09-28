@@ -494,7 +494,7 @@ async def test_off_text_matches_previous_format(settings: Settings) -> None:
     assert text.text == (
         "canny analysis of chair.png, returned as a 128x64 image. "
         f"{PROCESSORS['canny'].description} "
-        "Detection resolution 64."
+        "Working resolution 64."
     )
 
 
@@ -516,7 +516,7 @@ async def test_brief_text_omits_instructions_and_carries_measurement(
 
     text = result.content[0]
     assert isinstance(text, TextContent)
-    assert "at resolution 64" in text.text
+    assert "at working resolution 64" in text.text
     assert "Region covers" in text.text
     assert "Ask for it" not in text.text
 
@@ -737,10 +737,10 @@ async def test_compare_off_still_states_the_outcome_and_the_image(
     text = result.content[0]
     assert isinstance(text, TextContent)
     assert text.text == (
-        "Comparison of chair.png with chair.png, align none, at resolution 64. Compared in one "
-        "shared frame as asked, with no alignment fitted. The image shows the first image "
-        "dimmed, its edges in cyan, the second image's edges in magenta, and a yellow line "
-        "joining the two edges of each pair."
+        "Comparison of chair.png with chair.png, align none, at working resolution 64. "
+        "Compared in one shared frame as asked, with no alignment fitted. The image shows the "
+        "first image dimmed, its edges in cyan, the second image's edges in magenta, and a "
+        "yellow line joining the two edges of each pair."
     )
 
 
