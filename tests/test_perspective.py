@@ -301,14 +301,78 @@ def test_camera_records_how_far_its_farthest_point_lies() -> None:
     assert camera.farthest_point_diagonals == pytest.approx(0.957, abs=0.005)
 
 
-def test_level_horizon_from_one_side_point_names_the_roll_assumption() -> None:
+def leaning_test_segments(lean_degrees: float) -> np.ndarray:
+    """Eight segments 100 pixels long, at the columns ``vertical_test_segments`` uses.
+
+    Each leans ``lean_degrees`` to the right at the top instead of running
+    dead vertical, so the family they form reports that lean as its
+    direction. At ``lean_degrees`` of 0 this is ``vertical_test_segments``.
+    """
+    along = math.radians(90.0 - lean_degrees)
+    unit = np.array([math.cos(along), -math.sin(along)])
+    segments = []
+    for x in np.arange(60.0, 481.0, 60.0):
+        center = np.array([x, 250.0])
+        bottom, top = center - 50.0 * unit, center + 50.0 * unit
+        segments.append([bottom[0], bottom[1], top[0], top[1]])
+    return np.array(segments)
+
+
+def test_horizon_through_one_point_follows_leaning_parallel_verticals() -> None:
+    """Verticals leaning 5 degrees tilt the horizon by that much through the one open point."""
+    segments = np.vstack([converging_test_segments(RIGHT_TEST_POINT), leaning_test_segments(5.0)])
+
+    horizon = analyze_test_scene(segments).horizon
+
+    assert isinstance(horizon, Horizon)
+    assert horizon.left_y == pytest.approx(0.338, abs=0.005)
+    assert horizon.right_y == pytest.approx(0.425, abs=0.005)
+    assert "rolled" not in horizon.assumption
+
+
+def test_horizon_through_one_point_is_level_under_upright_verticals() -> None:
     segments = np.vstack([converging_test_segments(RIGHT_TEST_POINT), vertical_test_segments()])
 
     horizon = analyze_test_scene(segments).horizon
 
     assert isinstance(horizon, Horizon)
     assert horizon.left_y == pytest.approx(0.50, abs=0.005)
-    assert "not rolled" in horizon.assumption
+    assert horizon.right_y == pytest.approx(0.50, abs=0.005)
+
+
+def test_horizon_through_one_point_follows_converging_verticals() -> None:
+    """The verticals' point sits at offset (200, 2268.5) from the center.
+
+    Perpendicular to that line is a slope of -200 / 2268.5, through the one
+    other point at (948.8, 185.5).
+    """
+    segments = np.vstack(
+        [
+            converging_test_segments((456.0, 2524.5)),
+            converging_test_segments((948.8, 185.5)),
+        ]
+    )
+
+    horizon = analyze_test_scene(segments).horizon
+
+    assert isinstance(horizon, Horizon)
+    assert horizon.left_y == pytest.approx(0.526, abs=0.005)
+    assert horizon.right_y == pytest.approx(0.438, abs=0.005)
+    assert "optical center" in horizon.assumption
+
+
+def test_horizon_withheld_for_a_crop_with_converging_verticals() -> None:
+    segments = np.vstack(
+        [
+            converging_test_segments((456.0, 2524.5)),
+            converging_test_segments((948.8, 185.5)),
+        ]
+    )
+
+    horizon = analyze_test_scene(segments, cropped=True).horizon
+
+    assert isinstance(horizon, Withheld)
+    assert "crop" in horizon.reason
 
 
 def test_horizon_withheld_without_near_vertical_family() -> None:

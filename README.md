@@ -48,12 +48,16 @@ group meet at one vanishing point, which may lie outside the image, or run paral
 point is too far away to tell from infinity. The image draws each group in its own color, and the
 text gives each group's vanishing point or parallel direction with its edge count. In the full
 form it also gives how tightly each group fits and which edges share one line. A group is taken
-for the verticals of the scene when it runs within 10 degrees of the image vertical and its
-vanishing point either lies outside the image or stays parallel; a group whose vanishing point
-lies inside the image recedes into the scene and is never taken for the verticals, however close
-its direction runs to vertical. When a group is taken for the verticals, the analysis places the
-horizon. When at least two groups converge and their vanishing points are consistent with
-perpendicular directions, it estimates the field of view and the tilt of the camera. Each of
+for the verticals of the scene when it runs within 10 degrees of the image vertical and either
+runs parallel or has its vanishing point outside the image; a group whose vanishing point lies
+inside the image recedes into the scene and is never taken for the verticals, however close its
+direction runs to vertical. When a group is taken for the verticals, the analysis places the
+horizon: through the vanishing points of two other converging groups when there are that many,
+or, with only one, through that point and tilted by the verticals, perpendicular to their own
+direction or, when the verticals converge, to the line from the image center to their vanishing
+point; that second case is withheld for a crop, since the optical center of a crop is unknown.
+When at least two groups converge and their vanishing points are consistent with perpendicular
+directions, it estimates the field of view and the tilt of the camera. Each of
 those comes with the assumption behind it. When the evidence does not support one, the text says
 it is withheld and why: a cropped image has no known optical center, for example, so a crop never
 gets a camera estimate. The grouping is loose by design: an edge joins a group when it points

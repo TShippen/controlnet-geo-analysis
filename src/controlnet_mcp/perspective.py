@@ -216,7 +216,7 @@ def analyze_perspective(
         unassigned=len(segments) - assigned - too_short,
         too_short=too_short,
         shared_lines=tuple(shared),
-        horizon=_horizon(families, width, height),
+        horizon=_horizon(families, width, height, cropped),
         camera=_camera(families, width, height, cropped),
     )
 
@@ -467,12 +467,21 @@ def _vertical_family(
     return farthest
 
 
-def _horizon(families: list[LineFamily], width: int, height: int) -> Horizon | Withheld:
+def _horizon(
+    families: list[LineFamily], width: int, height: int, cropped: bool
+) -> Horizon | Withheld:
     """Place the horizon from the families that run along the ground.
 
-    A family taken for the verticals of the scene makes the others
-    horizontal in the scene, and the vanishing points of horizontal
-    directions lie on the horizon.
+    A family taken for the verticals of the scene fixes the tilt of the
+    horizon, perpendicular to the verticals, and the vanishing points of
+    horizontal directions lie on it. With two or more other converging
+    groups the horizon runs through the first two of their points, which
+    fixes both its tilt and position without needing the verticals' own
+    lean. With only one, that point fixes the position and the verticals
+    fix the tilt: their own direction when they stay parallel, or the line
+    from the image center to their vanishing point when they converge,
+    which takes the optical center to be the image center and so cannot be
+    used for a crop.
     """
     vertical = _vertical_family(families, width, height)
     if vertical is None:
@@ -501,21 +510,27 @@ def _horizon(families: list[LineFamily], width: int, height: int) -> Horizon | W
             source_families=sources[:2],
             assumption="the near-vertical group is vertical in the scene",
         )
-    if len(points) == 1 and vertical.vanishing_point is None:
-        level = points[0][1] / height
+    if len(points) == 1:
+        if vertical.vanishing_point is not None and cropped:
+            return Withheld(
+                "the verticals converge, and the optical center of a crop is unknown, so one "
+                "point does not give the tilt of the horizon"
+            )
+        x0, y0 = points[0]
+        slope = 1.0 / math.tan(math.radians(vertical.direction_degrees))
+        if vertical.vanishing_point is None:
+            assumption = "the near-vertical group is vertical in the scene"
+        else:
+            assumption = (
+                "the near-vertical group is vertical in the scene, and the optical center is "
+                "the image center"
+            )
         return Horizon(
-            left_y=level,
-            right_y=level,
+            left_y=(y0 - slope * x0) / height,
+            right_y=(y0 + slope * (width - x0)) / height,
             vertical_family=upright,
             source_families=sources,
-            assumption=(
-                "the near-vertical group is vertical in the scene and the image is not rolled"
-            ),
-        )
-    if len(points) == 1:
-        return Withheld(
-            "only one group besides the verticals converges, and the verticals converge too, "
-            "so the tilt of the horizon is not fixed"
+            assumption=assumption,
         )
     return Withheld("no group besides the verticals converges to a point")
 

@@ -642,8 +642,8 @@ PROCESSORS: dict[str, ProcessorSpec] = {
             "view and tilt of the camera. It reports groups, not meanings. Which group is "
             "vertical in the scene, and whether the groups are perpendicular, are assumptions, "
             "and the result names the ones it made. The group taken for the verticals is the "
-            f"one running within {VERTICAL_DEGREES:.0f} degrees of the image vertical whose "
-            "vanishing point lies outside the image, or that stays parallel; a group whose "
+            f"one running within {VERTICAL_DEGREES:.0f} degrees of the image vertical that "
+            "either runs parallel or has its vanishing point outside the image; a group whose "
             "vanishing point lies inside the image recedes into the scene and is never taken "
             "for the verticals, however close its direction runs to vertical. A crop, fewer "
             "than two converging groups, or groups that contradict being perpendicular "
@@ -668,7 +668,7 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         build=_build_lines,
         run=_run_perspective,
         detector="lines",
-        version="3",
+        version="4",
     ),
     "segments": ProcessorSpec(
         kind="segments",
