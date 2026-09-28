@@ -306,7 +306,8 @@ def build_server(service: AnalysisService) -> MCPServer:
             Field(
                 description=(
                     "A line to read evenly along, both ends included: [x0, y0, x1, y1] as "
-                    "fractions of the full image width and height, origin top-left."
+                    "fractions of the full image width and height, origin top-left. Give "
+                    "points or line, not both."
                 )
             ),
         ] = None,
@@ -450,7 +451,8 @@ def _sample_analysis_description() -> str:
     """
     return (
         "Read the values of a depth or normals analysis at chosen positions, or evenly along "
-        "a line. The values come from the same image analyze_image returns for the same "
+        "a line. Every call needs exactly one of points or line. The values come from the "
+        "same image analyze_image returns for the same "
         "filename, resolution, and crop, so look at that image first to choose positions. "
         "What the values are:\n"
         + "\n".join(f"- {kind}: {PROCESSORS[kind].values_description}" for kind in SAMPLED_KINDS)
