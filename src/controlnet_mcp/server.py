@@ -64,8 +64,11 @@ SERVER_INSTRUCTIONS = (
     "depth to order parts front to back, and canny last for a missing detail. Once a depth or "
     "normals analysis shows where to look, read its values at those positions with "
     "sample_analysis. To check a render of your model against a reference, or one reference "
-    "against another, pair their straight edges with compare_images. No analysis gives absolute "
-    "size; get one known dimension from the user or the image."
+    "against another, pair their straight edges with compare_images. Every tool reads files "
+    "from the reference image directory and none takes image data, so a render has to be saved "
+    "into that directory before it can be compared; ask the user where the directory is when "
+    "you do not know. No analysis gives absolute size; get one known dimension from the user "
+    "or the image."
 )
 
 PAIRED_IMAGE_READING = (
@@ -79,9 +82,11 @@ SIDE_BY_SIDE_READING = (
 
 COMPARISON_DESCRIPTION = (
     "Pair the straight edges of two reference images and report how far apart each pair lies. "
-    "Neither image is treated as the correct one. Each offset is how far the second image's "
-    "edge lies from the first image's edge, as (right, down) in fractions of the first image's "
-    f"width and height. {PAIRED_IMAGE_READING}\n"
+    "Neither image is treated as the correct one. Both must be files in the reference image "
+    "directory, under the names list_reference_images gives; this tool takes no image data, so "
+    "a render of your model has to be saved into that directory first. Each offset is how far "
+    "the second image's edge lies from the first image's edge, as (right, down) in fractions "
+    f"of the first image's width and height. {PAIRED_IMAGE_READING}\n"
     "- align fit: one flat transform is fitted from features the two images share, and the "
     "offsets are what remains after it. Whenever the viewpoints differ, the offsets mix real "
     "differences with the parallax of depth, and the result cannot tell them apart.\n"
