@@ -548,6 +548,26 @@ def test_comparison_full_counts_broken_pieces_apart_from_unmatched() -> None:
     assert "Compared in one shared frame as asked" in measurement.brief
 
 
+def test_comparison_full_says_what_a_piece_is() -> None:
+    first = np.array([[0.0, 40.0, 128.0, 40.0], [0.0, 200.0, 64.0, 200.0]])
+    second = np.array([[0.0, 40.0, 60.0, 40.0], [70.0, 40.0, 128.0, 40.0]])
+    pairing = Pairing((EdgePair(0, 0, (0.0, 0.0), (0.0, -68.0)),), (1,), (), (), (1,))
+
+    measurement = measure_comparison(
+        identity_alignment((256, 256), (256, 256), (256, 256), (256, 256)),
+        pairing,
+        first,
+        second,
+        (256, 256),
+        (256, 256),
+    )
+
+    assert (
+        "with at least half of its length along a stretch the other image's edge of that pair "
+        "covers"
+    ) in measurement.full
+
+
 def test_comparison_fitted_response_says_offsets_include_parallax() -> None:
     first, second, pairing = comparison_test_rows([2.0])
 

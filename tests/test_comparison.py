@@ -220,13 +220,57 @@ def test_pairing_is_symmetric_under_swap() -> None:
     assert pairing.unmatched_second == (1,)
 
 
-def test_broken_edge_pieces_sit_on_the_matched_line() -> None:
-    first = np.array([[0.0, 100.0, 200.0, 100.0]])
-    second = np.array([[0.0, 100.0, 90.0, 100.0], [110.0, 100.0, 200.0, 100.0]])
+def test_edge_in_line_with_a_pair_but_not_covered_is_unmatched() -> None:
+    """The unpaired edge lies on the paired edge's line, but the second image has no edge there."""
+    first = np.array([[0.0, 100.0, 80.0, 100.0], [150.0, 100.0, 230.0, 100.0]])
+    second = np.array([[0.0, 100.0, 80.0, 100.0]])
 
     pairing = pair_edges(first, second, IDENTITY, FRAME)
 
     assert [(pair.first_index, pair.second_index) for pair in pairing.pairs] == [(0, 0)]
+    assert pairing.unmatched_first == (1,)
+    assert pairing.on_matched_line_first == ()
+
+
+def test_broken_edge_pieces_sit_on_the_matched_line() -> None:
+    """The second image's one edge covers both first-image pieces along their shared line."""
+    first = np.array([[0.0, 100.0, 80.0, 100.0], [90.0, 100.0, 230.0, 100.0]])
+    second = np.array([[0.0, 102.0, 230.0, 102.0]])
+
+    pairing = pair_edges(first, second, IDENTITY, FRAME)
+
+    assert [(pair.first_index, pair.second_index) for pair in pairing.pairs] == [(0, 0)]
+    assert pairing.on_matched_line_first == (1,)
+    assert pairing.unmatched_first == ()
+
+
+def test_piece_less_than_half_covered_is_unmatched() -> None:
+    """The second image's edge covers only 30 of the second first-image piece's 80 pixels."""
+    first = np.array([[0.0, 100.0, 80.0, 100.0], [150.0, 100.0, 230.0, 100.0]])
+    second = np.array([[0.0, 100.0, 180.0, 100.0]])
+
+    pairing = pair_edges(first, second, IDENTITY, FRAME)
+
+    assert pairing.unmatched_first == (1,)
+
+
+def test_piece_half_covered_counts_as_a_piece() -> None:
+    """The second image's edge covers 40 of the second first-image piece's 80 pixels."""
+    first = np.array([[0.0, 100.0, 80.0, 100.0], [150.0, 100.0, 230.0, 100.0]])
+    second = np.array([[0.0, 100.0, 190.0, 100.0]])
+
+    pairing = pair_edges(first, second, IDENTITY, FRAME)
+
+    assert pairing.on_matched_line_first == (1,)
+
+
+def test_pieces_are_the_same_in_either_order() -> None:
+    """The broken-edge-pieces scene with the images swapped finds the same piece."""
+    first = np.array([[0.0, 102.0, 230.0, 102.0]])
+    second = np.array([[0.0, 100.0, 80.0, 100.0], [90.0, 100.0, 230.0, 100.0]])
+
+    pairing = pair_edges(first, second, IDENTITY, FRAME)
+
     assert pairing.on_matched_line_second == (1,)
     assert pairing.unmatched_second == ()
 

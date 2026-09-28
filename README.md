@@ -89,19 +89,21 @@ for a line, the spacing between samples. Any other analysis is rejected.
 `compare_images` detects the straight edges of two images, brings the second image into the
 frame of the first, and pairs edges that lie close in direction and position. Each pair reports
 the offset between its edges in fractions of the first image, and neither image is treated as the
-correct one. With `align` set to `fit`, the default, one flat transform is fitted from features
-the two images share. The result states how many features support it and how much of the image
-they cover, and flags the alignment as ambiguous when a second transform is supported nearly as
-well. When too few features match, the alignment is withheld with the reason, no pairs are
-reported, and the image shows the two sets of edges side by side. With `align` set to `none` the
-caller asserts that the images already share one frame, as a render from a matching camera does,
-and images of different proportions are refused. The offsets left after a fitted transform mix
-real differences with the parallax of depth whenever the viewpoints differ, so the tool does not
-relate views of a scene taken from different positions. The response repeats how to read the
-offsets and what a pair is, and it says when an image reached the 200 edges the detector returns
-at most, since an edge with no partner may then be missing only from the other image's
-detection. How the images were aligned, or why they were not, is stated even when
-`RESULT_MEASUREMENTS` is `off`. Comparisons are not cached.
+correct one. An edge with no partner is unmatched, unless it lies on the line of a paired edge
+with at least half of its length along a stretch the other image's edge of that pair covers, in
+which case it is a piece of that matched edge instead. With `align` set to `fit`, the default,
+one flat transform is fitted from features the two images share. The result states how many
+features support it and how much of the image they cover, and flags the alignment as ambiguous
+when a second transform is supported nearly as well. When too few features match, the alignment
+is withheld with the reason, no pairs are reported, and the image shows the two sets of edges
+side by side. With `align` set to `none` the caller asserts that the images already share one
+frame, as a render from a matching camera does, and images of different proportions are refused.
+The offsets left after a fitted transform mix real differences with the parallax of depth
+whenever the viewpoints differ, so the tool does not relate views of a scene taken from different
+positions. The response repeats how to read the offsets and what a pair is, and it says when an
+image reached the 200 edges the detector returns at most, since an edge with no partner may then
+be missing only from the other image's detection. How the images were aligned, or why they were
+not, is stated even when `RESULT_MEASUREMENTS` is `off`. Comparisons are not cached.
 
 Every analysis measures its own output. A short and a long form of that measurement are stored
 with the cached image, and `RESULT_MEASUREMENTS` in `.env` decides which one the agent sees.

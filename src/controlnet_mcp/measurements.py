@@ -493,7 +493,9 @@ def measure_comparison(
     broken = (
         f" Pieces of matched edges, not counted as unmatched: "
         f"{len(pairing.on_matched_line_first)} in the first image and "
-        f"{len(pairing.on_matched_line_second)} in the second."
+        f"{len(pairing.on_matched_line_second)} in the second. A piece is an edge with no "
+        "partner that lies on the line of a paired edge, with at least half of its length "
+        "along a stretch the other image's edge of that pair covers."
     )
     unmatched = _longest_unmatched(
         first, pairing.unmatched_first, first_size, region, "first"

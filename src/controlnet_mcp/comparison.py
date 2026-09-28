@@ -54,6 +54,10 @@ PAIR_DISTANCE_SHARE = 0.05
 # Pixels. Each endpoint is placed to about 1 pixel, on each of the two edges
 # being compared.
 COLLINEAR_PIXELS = 2.0
+# Share of a piece's length, measured along the line of the paired edge it sits on. A
+# piece mostly outside what the other image shows along that line is an edge that
+# image lacks, not a broken-off part of the matched edge.
+PIECE_COVERED_SHARE = 0.5
 # Pixels from the origin past which an edge is left out of the drawing. A
 # transform can send an endpoint toward infinity, and the drawing takes
 # coordinates as 32-bit integers, which a million pixels stays well inside.
@@ -132,8 +136,10 @@ class Pairing:
         unmatched_first: First-image segments with no partner.
         unmatched_second: Second-image segments with no partner.
         on_matched_line_first: First-image segments with no partner that lie
-            on the line of a paired first-image segment: a broken piece of a
-            matched edge, not a missing edge.
+            on the line of a paired first-image segment, with at least
+            ``PIECE_COVERED_SHARE`` of their length along a stretch the
+            pair's second-image edge covers: a broken piece of a matched
+            edge, not a missing edge.
         on_matched_line_second: The same among the second image's segments.
     """
 
@@ -266,8 +272,8 @@ def pair_edges(
                 pairs.append(_edge_pair(first, mapped, index, int(partner)))
     paired_first = [pair.first_index for pair in pairs]
     paired_second = [pair.second_index for pair in pairs]
-    on_line_first = _on_matched_lines(first, paired_first)
-    on_line_second = _on_matched_lines(mapped, paired_second)
+    on_line_first = _on_matched_lines(first, paired_first, mapped[paired_second])
+    on_line_second = _on_matched_lines(mapped, paired_second, first[paired_first])
     return Pairing(
         pairs=tuple(pairs),
         unmatched_first=_remaining(len(first), paired_first, on_line_first),
@@ -477,16 +483,60 @@ def _edge_pair(first: np.ndarray, mapped: np.ndarray, index: int, partner: int) 
     )
 
 
-def _on_matched_lines(segments: np.ndarray, paired: list[int]) -> tuple[int, ...]:
-    """The unpaired segments lying on the line of a paired segment of the same image."""
+def _line_projections(segments: np.ndarray, points: np.ndarray) -> np.ndarray:
+    """Distance of each point along each segment's direction, shaped (segments, points)."""
+    along = _unit_directions(segments)
+    offset = points[np.newaxis, :, :] - segments[:, np.newaxis, :2]
+    return (offset * along[:, np.newaxis, :]).sum(axis=2)
+
+
+def _covered_shares(lines: np.ndarray, partners: np.ndarray, segments: np.ndarray) -> np.ndarray:
+    """Share of each segment's length, measured along each line, that the line's partner covers.
+
+    ``partners[k]`` is the other image's edge of the pair that put ``lines[k]``
+    on the line, in the same order.
+    """
+    along = _unit_directions(lines)
+    starts = lines[:, :2]
+    partner_projections = np.stack(
+        [
+            ((partners[:, :2] - starts) * along).sum(axis=1),
+            ((partners[:, 2:] - starts) * along).sum(axis=1),
+        ]
+    )
+    partner_lo, partner_hi = partner_projections.min(axis=0), partner_projections.max(axis=0)
+    segment_start = _line_projections(lines, segments[:, :2])
+    segment_end = _line_projections(lines, segments[:, 2:])
+    segment_lo, segment_hi = np.minimum(segment_start, segment_end), np.maximum(
+        segment_start, segment_end
+    )
+    overlap = np.clip(
+        np.minimum(segment_hi, partner_hi[:, np.newaxis])
+        - np.maximum(segment_lo, partner_lo[:, np.newaxis]),
+        0.0,
+        None,
+    )
+    length = segment_hi - segment_lo
+    return np.divide(overlap, length, out=np.zeros_like(overlap), where=length > 0)
+
+
+def _on_matched_lines(
+    segments: np.ndarray, paired: list[int], partners: np.ndarray
+) -> tuple[int, ...]:
+    """The unpaired segments on the line of a paired segment, over the stretch its partner covers.
+
+    ``partners[k]`` is the other image's edge of the pair that put the
+    paired segment at ``paired[k]`` on its line.
+    """
     if not paired or len(segments) == len(paired):
         return ()
     lines = segments[paired]
     near_start = _line_distances(lines, segments[:, :2]) <= COLLINEAR_PIXELS
     near_end = _line_distances(lines, segments[:, 2:]) <= COLLINEAR_PIXELS
-    on_a_line = (near_start & near_end).any(axis=0)
+    covered = _covered_shares(lines, partners, segments) >= PIECE_COVERED_SHARE
+    on_a_piece = (near_start & near_end & covered).any(axis=0)
     return tuple(
-        index for index in range(len(segments)) if on_a_line[index] and index not in set(paired)
+        index for index in range(len(segments)) if on_a_piece[index] and index not in set(paired)
     )
 
 
