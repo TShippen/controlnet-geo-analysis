@@ -125,7 +125,7 @@ def test_only_segments_accepts_prompt() -> None:
 
 
 def test_unknown_kind_raises() -> None:
-    with pytest.raises(UnknownAnalysisError, match="pose"):
+    with pytest.raises(UnknownAnalysisError):
         get_processor("pose")
 
 

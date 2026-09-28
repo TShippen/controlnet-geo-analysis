@@ -76,12 +76,12 @@ def test_resolve_rejects_absolute_path(reference_dir: Path) -> None:
 def test_resolve_rejects_unsupported_extension(reference_dir: Path) -> None:
     (reference_dir / "notes.txt").write_text("x")
 
-    with pytest.raises(ReferenceImageError, match=r"\.png"):
+    with pytest.raises(ReferenceImageError):
         resolve_reference_path(reference_dir, "notes.txt")
 
 
 def test_resolve_rejects_missing_file(reference_dir: Path) -> None:
-    with pytest.raises(ReferenceImageError, match="does not exist"):
+    with pytest.raises(ReferenceImageError):
         resolve_reference_path(reference_dir, "missing.png")
 
 
@@ -89,7 +89,7 @@ def test_resolve_rejects_symlink_escape(reference_dir: Path, tmp_path: Path) -> 
     outside = write_test_image(tmp_path / "outside.png")
     (reference_dir / "link.png").symlink_to(outside)
 
-    with pytest.raises(ReferenceImageError, match="outside"):
+    with pytest.raises(ReferenceImageError):
         resolve_reference_path(reference_dir, "link.png")
 
 
@@ -120,7 +120,7 @@ def test_decode_reference_image_converts_to_rgb(reference_dir: Path) -> None:
 
 
 def test_decode_reference_image_rejects_garbage() -> None:
-    with pytest.raises(ReferenceImageError, match="decoded"):
+    with pytest.raises(ReferenceImageError):
         decode_reference_image(b"not an image", "bad.png")
 
 

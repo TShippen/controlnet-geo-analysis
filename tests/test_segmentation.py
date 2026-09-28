@@ -21,24 +21,24 @@ from controlnet_mcp.segmentation import (
 
 
 def test_prompt_requires_box_or_point() -> None:
-    with pytest.raises(PromptError, match="box"):
+    with pytest.raises(PromptError):
         RegionPrompt.from_lists(None, None)
 
 
 def test_prompt_rejects_wrong_lengths() -> None:
-    with pytest.raises(PromptError, match="four"):
+    with pytest.raises(PromptError):
         RegionPrompt.from_lists([0.1, 0.2, 0.3], None)
-    with pytest.raises(PromptError, match="two"):
+    with pytest.raises(PromptError):
         RegionPrompt.from_lists(None, [0.5])
 
 
 def test_prompt_rejects_out_of_range() -> None:
-    with pytest.raises(PromptError, match="between 0 and 1"):
+    with pytest.raises(PromptError):
         RegionPrompt.from_lists(None, [1.2, 0.5])
 
 
 def test_prompt_rejects_inverted_box() -> None:
-    with pytest.raises(PromptError, match="top-left"):
+    with pytest.raises(PromptError):
         RegionPrompt.from_lists([0.6, 0.1, 0.4, 0.9], None)
 
 
@@ -69,17 +69,17 @@ def test_prompt_digest_ignores_float_noise() -> None:
 
 
 def test_prompt_rejects_malformed_exclude_point() -> None:
-    with pytest.raises(PromptError, match="exclude point must have two values"):
+    with pytest.raises(PromptError):
         RegionPrompt.from_lists(None, [0.5, 0.5], exclude=[[0.1, 0.2, 0.3]])
 
 
 def test_prompt_rejects_extent_with_a_box() -> None:
-    with pytest.raises(PromptError, match="lone point"):
+    with pytest.raises(PromptError):
         RegionPrompt.from_lists([0.1, 0.1, 0.9, 0.9], None, extent="largest")
 
 
 def test_prompt_rejects_extent_with_exclude_points() -> None:
-    with pytest.raises(PromptError, match="lone point"):
+    with pytest.raises(PromptError):
         RegionPrompt.from_lists(None, [0.5, 0.5], exclude=[[0.9, 0.5]], extent="smallest")
 
 

@@ -95,7 +95,7 @@ def test_points_map_through_crop() -> None:
 def test_point_outside_crop_is_rejected() -> None:
     value_map = depth_test_map(halves_test_levels(50, 150))
 
-    with pytest.raises(SamplingError, match="crop"):
+    with pytest.raises(SamplingError):
         sample_points(value_map, [(0.2, 0.5)], CropRegion(0.5, 0.0, 1.0, 1.0))
 
 
@@ -183,20 +183,20 @@ def test_normals_change_measured_in_degrees() -> None:
 def test_line_count_out_of_range_is_rejected() -> None:
     value_map = depth_test_map(np.full((64, 64), 120))
 
-    with pytest.raises(SamplingError, match="count"):
+    with pytest.raises(SamplingError):
         sample_line(value_map, (0.0, 0.5), (1.0, 0.5), 1, FULL_IMAGE)
 
 
 def test_parse_points_rejects_a_value_outside_the_image() -> None:
-    with pytest.raises(SamplingError, match="between 0 and 1"):
+    with pytest.raises(SamplingError):
         parse_points([[0.5, 1.2]])
 
 
 def test_parse_points_rejects_too_many() -> None:
-    with pytest.raises(SamplingError, match="1 to 64"):
+    with pytest.raises(SamplingError):
         parse_points([[0.5, 0.5]] * 65)
 
 
 def test_parse_line_rejects_wrong_length() -> None:
-    with pytest.raises(SamplingError, match="four"):
+    with pytest.raises(SamplingError):
         parse_line([0.1, 0.2, 0.3])

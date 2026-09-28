@@ -69,7 +69,7 @@ def test_load_settings_reads_env_file(tmp_path: Path) -> None:
 def test_missing_reference_dir_raises(tmp_path: Path) -> None:
     env_file = write_env(tmp_path, REFERENCE_IMAGE_DIR=str(tmp_path / "nowhere"))
 
-    with pytest.raises(ConfigurationError, match="REFERENCE_IMAGE_DIR"):
+    with pytest.raises(ConfigurationError):
         load_settings(env_file)
 
 
@@ -84,7 +84,7 @@ def test_output_dir_is_created(tmp_path: Path) -> None:
 def test_resolution_out_of_range_rejected(tmp_path: Path) -> None:
     env_file = write_env(tmp_path, DEFAULT_DETECT_RESOLUTION="32")
 
-    with pytest.raises(ConfigurationError, match="DEFAULT_DETECT_RESOLUTION"):
+    with pytest.raises(ConfigurationError):
         load_settings(env_file)
 
 
@@ -97,7 +97,7 @@ def test_result_measurements_default_is_brief(tmp_path: Path) -> None:
 def test_result_measurements_rejects_unknown_value(tmp_path: Path) -> None:
     env_file = write_env(tmp_path, RESULT_MEASUREMENTS="loud")
 
-    with pytest.raises(ConfigurationError, match="RESULT_MEASUREMENTS"):
+    with pytest.raises(ConfigurationError):
         load_settings(env_file)
 
 

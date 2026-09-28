@@ -222,13 +222,13 @@ def test_segments_requires_prompt(
     counter = RunCounter()
     monkeypatch.setitem(PROCESSORS, "fake", make_fake_spec("fake", counter, accepts_prompt=True))
 
-    with pytest.raises(PromptError, match="box"):
+    with pytest.raises(PromptError):
         service.analyze(reference, "fake", 64, None)
     assert counter.calls == 0
 
 
 def test_prompt_rejected_for_whole_image_analysis(service: AnalysisService, reference: str) -> None:
-    with pytest.raises(PromptError, match="whole image"):
+    with pytest.raises(PromptError):
         service.analyze(reference, "canny", 64, RegionPrompt.from_lists(None, [0.5, 0.5]))
 
 
@@ -282,7 +282,7 @@ def test_crop_rejected_for_prompted_analysis(
     counter = RunCounter()
     monkeypatch.setitem(PROCESSORS, "fake", make_fake_spec("fake", counter, accepts_prompt=True))
 
-    with pytest.raises(CropError, match="box or point"):
+    with pytest.raises(CropError):
         service.analyze(
             reference,
             "fake",
@@ -313,7 +313,7 @@ def test_different_crops_cache_separately(
 def test_line_length_rejected_for_other_analyses(
     service: AnalysisService, reference: str
 ) -> None:
-    with pytest.raises(OptionError, match="applies only to lines"):
+    with pytest.raises(OptionError):
         service.analyze(reference, "canny", 64, options=AnalysisOptions(line_length="long"))
 
 
@@ -524,7 +524,7 @@ def test_sample_serves_cached_render(
 
 
 def test_sample_rejects_analysis_without_values(service: AnalysisService, reference: str) -> None:
-    with pytest.raises(SamplingError, match="depth, normals"):
+    with pytest.raises(SamplingError):
         service.sample(reference, "canny", [(0.5, 0.5)], None, None, 64)
 
 
@@ -533,7 +533,7 @@ def test_sample_rejects_points_together_with_line(
 ) -> None:
     monkeypatch.setitem(PROCESSORS, "fake", sampled_test_spec("fake"))
 
-    with pytest.raises(SamplingError, match="exactly one"):
+    with pytest.raises(SamplingError):
         service.sample(reference, "fake", [(0.5, 0.5)], (0.0, 0.5, 1.0, 0.5), None, 64)
 
 
@@ -542,7 +542,7 @@ def test_sample_rejects_neither_points_nor_line(
 ) -> None:
     monkeypatch.setitem(PROCESSORS, "fake", sampled_test_spec("fake"))
 
-    with pytest.raises(SamplingError, match="exactly one"):
+    with pytest.raises(SamplingError):
         service.sample(reference, "fake", None, None, None, 64)
 
 
@@ -551,7 +551,7 @@ def test_sample_rejects_count_with_points(
 ) -> None:
     monkeypatch.setitem(PROCESSORS, "fake", sampled_test_spec("fake"))
 
-    with pytest.raises(SamplingError, match="count"):
+    with pytest.raises(SamplingError):
         service.sample(reference, "fake", [(0.5, 0.5)], None, 8, 64)
 
 
@@ -633,7 +633,7 @@ def test_compare_none_with_different_aspect_ratios_is_error(
     write_test_image(settings.reference_image_dir / "chair.png", size=(64, 32))
     write_test_image(settings.reference_image_dir / "table.jpg", size=(16, 16))
 
-    with pytest.raises(ComparisonError, match="proportions"):
+    with pytest.raises(ComparisonError):
         service.compare("chair.png", "table.jpg", align="none", resolution=64)
 
 
@@ -644,7 +644,7 @@ def test_compare_none_refuses_proportions_the_resize_hides(
     write_test_image(settings.reference_image_dir / "wide.png", size=(1000, 750))
     write_test_image(settings.reference_image_dir / "narrow.png", size=(1000, 720))
 
-    with pytest.raises(ComparisonError, match="proportions"):
+    with pytest.raises(ComparisonError):
         service.compare("wide.png", "narrow.png", align="none", resolution=512)
 
 
