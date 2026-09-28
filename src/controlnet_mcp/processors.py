@@ -686,8 +686,8 @@ PROCESSORS: dict[str, ProcessorSpec] = {
         ),
         use_when=(
             "Use it on scenes with straight parallel edges: to find where the main directions "
-            "converge, which edges share one line, and, when the evidence allows, the field of "
-            "view and tilt of the camera. It reports groups, not meanings. Which group is "
+            "converge and, when the evidence allows, the field of view and tilt of the "
+            "camera. It reports groups, not meanings. Which group is "
             "vertical in the scene, and whether the groups are perpendicular, are assumptions, "
             "and the result names the ones it made. A crop, fewer than two converging groups, "
             "or groups that contradict being perpendicular withhold the camera estimate, and "
