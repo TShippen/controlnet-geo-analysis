@@ -41,8 +41,9 @@ MIN_COVERAGE = 0.125
 # Share of the first fit's features. A second, different transform explaining
 # half as many features is a rival reading of how the images relate.
 AMBIGUITY_SHARE = 0.5
-# Share by which two aspect ratios may differ and still be one frame, which
-# allows for the detection sizes of both images being rounded.
+# Share by which two aspect ratios may differ and still be one frame. It
+# allows a crop fitted to whole pixels, or a render exported a pixel off, to
+# count as the same frame.
 ASPECT_TOLERANCE = 0.01
 # Degrees between two edges of a pair. Detected directions are good to about
 # 3 degrees on a short edge, and a little is left for what alignment leaves over.
@@ -179,25 +180,40 @@ def align_images(first: np.ndarray, second: np.ndarray) -> Alignment | Withheld:
     )
 
 
-def identity_alignment(first_size: tuple[int, int], second_size: tuple[int, int]) -> Alignment:
+def identity_alignment(
+    first_size: tuple[int, int],
+    second_size: tuple[int, int],
+    first_source: tuple[int, int],
+    second_source: tuple[int, int],
+) -> Alignment:
     """The alignment of two images the caller says share one frame.
+
+    The detection size depends only on proportions and resolution, and
+    rounding it to a multiple of 64 can make two different proportions look
+    equal, never the reverse. Whether the frames match is decided from the
+    source images instead.
 
     Args:
         first_size: Width and height of the first image's detection frame.
         second_size: Width and height of the second image's detection frame.
+        first_source: Width and height of the first image before it was
+            resized for detection.
+        second_source: Width and height of the second image before it was
+            resized for detection.
 
     Raises:
-        ComparisonError: When the aspect ratios differ by more than
-            ``ASPECT_TOLERANCE``, so the images cannot share one frame.
+        ComparisonError: When the aspect ratios of the source images differ
+            by more than ``ASPECT_TOLERANCE``, so the images cannot share one
+            frame.
     """
-    first_aspect = first_size[0] / first_size[1]
-    second_aspect = second_size[0] / second_size[1]
+    first_aspect = first_source[0] / first_source[1]
+    second_aspect = second_source[0] / second_source[1]
     if abs(first_aspect - second_aspect) > ASPECT_TOLERANCE * first_aspect:
         raise ComparisonError(
             "The images have different proportions "
-            f"({first_size[0]}x{first_size[1]} and {second_size[0]}x{second_size[1]} when "
-            "analyzed), so they do not share one frame. Use align fit, or crop them to the "
-            "same proportions."
+            f"({first_source[0]}x{first_source[1]} and {second_source[0]}x{second_source[1]}), "
+            "so they do not share one frame. Use align fit, or crop them to the same "
+            "proportions."
         )
     scale = np.diag([first_size[0] / second_size[0], first_size[1] / second_size[1], 1.0])
     return Alignment(

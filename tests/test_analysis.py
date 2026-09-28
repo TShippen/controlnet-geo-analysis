@@ -637,6 +637,17 @@ def test_compare_none_with_different_aspect_ratios_is_error(
         service.compare("chair.png", "table.jpg", align="none", resolution=64)
 
 
+def test_compare_none_refuses_proportions_the_resize_hides(
+    service: AnalysisService, settings: Settings
+) -> None:
+    """At resolution 512, 1000x750 and 1000x720 both resize to 704x512, hiding their difference."""
+    write_test_image(settings.reference_image_dir / "wide.png", size=(1000, 750))
+    write_test_image(settings.reference_image_dir / "narrow.png", size=(1000, 720))
+
+    with pytest.raises(ComparisonError, match="proportions"):
+        service.compare("wide.png", "narrow.png", align="none", resolution=512)
+
+
 def test_compare_rejects_files_outside_the_directory(
     service: AnalysisService, reference: str
 ) -> None:

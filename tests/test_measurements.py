@@ -534,7 +534,12 @@ def test_comparison_full_counts_broken_pieces_apart_from_unmatched() -> None:
     pairing = Pairing((EdgePair(0, 0, (0.0, 0.0), (0.0, -68.0)),), (1,), (), (), (1,))
 
     measurement = measure_comparison(
-        identity_alignment((256, 256), (256, 256)), pairing, first, second, (256, 256), (256, 256)
+        identity_alignment((256, 256), (256, 256), (256, 256), (256, 256)),
+        pairing,
+        first,
+        second,
+        (256, 256),
+        (256, 256),
     )
 
     assert "unmatched 1 in the first image and 0 in the second" in measurement.brief
@@ -560,7 +565,12 @@ def test_comparison_shared_frame_response_names_the_asserted_frame() -> None:
     first, second, pairing = comparison_test_rows([2.0])
 
     brief = measure_comparison(
-        identity_alignment((256, 256), (256, 256)), pairing, first, second, (256, 256), (256, 256)
+        identity_alignment((256, 256), (256, 256), (256, 256), (256, 256)),
+        pairing,
+        first,
+        second,
+        (256, 256),
+        (256, 256),
     ).brief
 
     assert "measured in the shared frame that was asked for" in brief
@@ -606,7 +616,7 @@ def test_comparison_outcome_has_no_numbers() -> None:
     outcomes = [
         comparison_outcome(comparison_test_alignment()),
         comparison_outcome(comparison_test_alignment(ambiguous=True)),
-        comparison_outcome(identity_alignment((256, 256), (256, 256))),
+        comparison_outcome(identity_alignment((256, 256), (256, 256), (256, 256), (256, 256))),
         comparison_outcome(Withheld("views too different to align")),
     ]
 

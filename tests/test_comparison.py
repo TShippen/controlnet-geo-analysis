@@ -131,7 +131,7 @@ def test_two_planes_moving_apart_are_flagged_ambiguous() -> None:
 
 def test_identity_scales_the_second_frame_onto_the_first() -> None:
     """A second frame half the size of the first maps its corner (128, 64) to (256, 128)."""
-    alignment = identity_alignment((256, 128), (128, 64))
+    alignment = identity_alignment((256, 128), (128, 64), (256, 128), (128, 64))
 
     assert alignment.fitted is False
     mapped = map_segments(np.array([[0.0, 0.0, 128.0, 64.0]]), alignment.transform)
@@ -140,7 +140,28 @@ def test_identity_scales_the_second_frame_onto_the_first() -> None:
 
 def test_identity_rejects_different_aspect_ratios() -> None:
     with pytest.raises(ComparisonError, match="proportions"):
-        identity_alignment((64, 32), (16, 16))
+        identity_alignment((64, 32), (16, 16), (64, 32), (16, 16))
+
+
+def test_identity_rejects_proportions_the_detection_sizes_hide() -> None:
+    """1000x750 and 1000x720 both resize to 704x512, which would hide their difference."""
+    with pytest.raises(ComparisonError, match="proportions") as excinfo:
+        identity_alignment((704, 512), (704, 512), (1000, 750), (1000, 720))
+
+    assert "1000x750" in str(excinfo.value)
+    assert "1000x720" in str(excinfo.value)
+
+
+def test_identity_accepts_one_frame_at_two_sizes() -> None:
+    """1000x750 and 2000x1500 are the same frame at two resolutions, so they share it."""
+    alignment = identity_alignment((704, 512), (704, 512), (1000, 750), (2000, 1500))
+
+    assert alignment.transform == pytest.approx(IDENTITY)
+
+
+def test_identity_accepts_a_pixel_of_difference() -> None:
+    """A crop fitted to whole pixels can leave sources a pixel apart, still counted as one frame."""
+    identity_alignment((704, 512), (704, 512), (1000, 750), (1001, 750))
 
 
 def test_pairing_reports_a_known_offset() -> None:
@@ -169,7 +190,7 @@ def test_pairing_maps_the_second_image_through_the_transform() -> None:
     """A second frame of half the size: its edge on row 52 lands on row 104 of the first."""
     first = np.array([[0.0, 100.0, 200.0, 100.0]])
     second = np.array([[0.0, 52.0, 100.0, 52.0]])
-    transform = identity_alignment((256, 256), (128, 128)).transform
+    transform = identity_alignment((256, 256), (128, 128), (256, 256), (128, 128)).transform
 
     (pair,) = pair_edges(first, second, transform, FRAME).pairs
 
@@ -253,7 +274,7 @@ def test_render_draws_both_edge_sets_and_the_offset() -> None:
     image = np.zeros((256, 256, 3), dtype=np.uint8)
     first = np.array([[0.0, 100.0, 200.0, 100.0]])
     second = np.array([[0.0, 110.0, 200.0, 110.0]])
-    alignment = identity_alignment(FRAME, FRAME)
+    alignment = identity_alignment(FRAME, FRAME, FRAME, FRAME)
     pairing = pair_edges(first, second, alignment.transform, FRAME)
 
     canvas = render_comparison(image, image, first, second, alignment, pairing)

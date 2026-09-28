@@ -354,11 +354,13 @@ class AnalysisService:
         alignment: Alignment | Withheld | None = None
         if align == "none":
             # Refused before any detection runs, since the sizes alone decide it.
-            alignment = identity_alignment(prepared[0][0].size, prepared[1][0].size)
+            alignment = identity_alignment(
+                prepared[0][0].size, prepared[1][0].size, prepared[0][3], prepared[1][3]
+            )
         edges = []
         with self._inference_lock:
             detector = self.model_manager.get(PROCESSORS["lines"])
-            for name, (image, region, snapped) in zip(names, prepared, strict=True):
+            for name, (image, region, snapped, _source_size) in zip(names, prepared, strict=True):
                 logger.info("Detecting straight edges of %s at %d", name, resolution)
                 segments, _, _ = detect_line_segments(detector, image, resolution)
                 edges.append(_DetectedEdges(image, segments, region, snapped))
@@ -405,21 +407,23 @@ class AnalysisService:
 
     def _prepared_for_comparison(
         self, filename: str, resolution: int, crop: CropRegion | None
-    ) -> tuple[Image.Image, CropRegion, CropRegion | None]:
+    ) -> tuple[Image.Image, CropRegion, CropRegion | None, tuple[int, int]]:
         """One image of a comparison, cropped and resized for detection.
 
         Returns:
             The image at its detection size, the part of the reference it
-            shows, and that part as a crop aligned to the image's pixels, or
-            None when the whole image is shown.
+            shows, that part as a crop aligned to the image's pixels or None
+            when the whole image is shown, and the width and height of the
+            image before it was resized for detection.
         """
         path = resolve_reference_path(self.settings.reference_image_dir, filename)
         image = decode_reference_image(path.read_bytes(), filename)
         if crop is None:
-            return resize_for_detection(image, resolution), FULL_IMAGE, None
+            return resize_for_detection(image, resolution), FULL_IMAGE, None, image.size
         snapped = crop.snapped(image.width, image.height)
         image = image.crop(snapped.pixel_box(image.width, image.height))
-        return resize_for_detection(image, resolution), snapped, snapped
+        source_size = image.size
+        return resize_for_detection(image, resolution), snapped, snapped, source_size
 
     def _selected_form(self, measurement: Measurement) -> str:
         """The measurement text the configured verbosity emits.
