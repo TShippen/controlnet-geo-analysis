@@ -51,6 +51,16 @@ VERTICAL_DEGREES = 10.0
 # Share of the focal length. Pairs of families that disagree by more than a
 # tenth do not describe one camera looking at perpendicular directions.
 CAMERA_AGREEMENT = 0.1
+# Pixels across the image between the two vanishing points the horizon is drawn
+# through. Each point is placed to about a pixel, so closer than that the slope
+# of the line through them comes from the placement error alone.
+MIN_HORIZON_SPAN_PIXELS = 1.0
+# Length of the intersection of two lines, below which they are one line. Lines
+# have unit normals and offsets in pixels, so the intersection of two different
+# lines is at least as long as the sine of the angle between them or, when they
+# are parallel, the pixels between them. Only pieces of one line fall to the
+# rounding error of the arithmetic.
+SAME_LINE_LENGTH = 1e-9
 
 
 @dataclass(frozen=True)
@@ -281,7 +291,7 @@ def _best_supported(segments: np.ndarray, lengths: np.ndarray) -> np.ndarray | N
     proposals = np.cross(lines[first], lines[second])
     norms = np.linalg.norm(proposals, axis=1)
     # Two pieces of one line meet everywhere along it and propose nothing.
-    proposals = proposals[norms > 1e-9]
+    proposals = proposals[norms > SAME_LINE_LENGTH]
     if len(proposals) == 0:
         return None
     supporting = _angles_to(proposals, segments) < INLIER_DEGREES
@@ -449,7 +459,7 @@ def _horizon(families: list[LineFamily], width: int, height: int) -> Horizon | W
     points = [point for _, point in converging]
     if len(points) >= 2:
         (x0, y0), (x1, y1) = points[0], points[1]
-        if abs(x1 - x0) < 1.0:
+        if abs(x1 - x0) < MIN_HORIZON_SPAN_PIXELS:
             return Withheld("the two converging groups meet above one another, not side by side")
         slope = (y1 - y0) / (x1 - x0)
         return Horizon(

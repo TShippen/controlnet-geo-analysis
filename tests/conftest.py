@@ -30,6 +30,26 @@ SAMPLE_MEASUREMENT = Measurement(
 """A measurement in the shape ``measure_mask`` produces, for tests that only need one."""
 
 
+MODEL_TEST_NAMES = (
+    "Zoe",
+    "MLSD",
+    "SAM",
+    "BAE",
+    "BEiT",
+    "Canny",
+    "ControlNet",
+    "SIFT",
+    "MAGSAC",
+    "RANSAC",
+)
+"""Names of the models and algorithms behind the analyses, which no agent-facing text gives."""
+
+
+def model_names_in_test_text(text: str) -> list[str]:
+    """The model and algorithm names that ``text`` gives, in the case they are written in."""
+    return [name for name in MODEL_TEST_NAMES if name in text]
+
+
 def write_test_image(
     path: Path,
     size: tuple[int, int] = (32, 32),

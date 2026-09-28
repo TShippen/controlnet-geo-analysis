@@ -12,7 +12,7 @@ import torch
 from mcp import Client
 from mcp.types import ImageContent, TextContent
 
-from conftest import write_test_image
+from conftest import model_names_in_test_text, write_test_image
 from controlnet_mcp.analysis import AnalysisService
 from controlnet_mcp.cache import AnalysisCache
 from controlnet_mcp.checkpoints import REQUIRED_CHECKPOINTS, CheckpointSpec
@@ -63,6 +63,7 @@ async def test_all_analyses_end_to_end(client: Client, manager: ModelManager) ->
         assert len(manager.loaded_detectors) <= 1
         assert "%" in text.text or "straight edges" in text.text, kind
         assert "Ask for it" not in text.text, kind
+        assert model_names_in_test_text(text.text) == [], kind
 
     for kind in ANALYSIS_KINDS:
         cached = await client.call_tool("analyze_image", arguments_for(kind))

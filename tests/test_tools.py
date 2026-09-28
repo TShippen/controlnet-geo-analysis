@@ -14,6 +14,7 @@ from PIL import Image
 from conftest import (
     SAMPLE_MEASUREMENT,
     fake_test_line_detection,
+    model_names_in_test_text,
     sampled_test_spec,
     write_test_image,
 )
@@ -32,19 +33,6 @@ from controlnet_mcp.processors import (
 from controlnet_mcp.regions import CropRegion
 from controlnet_mcp.segmentation import RegionPrompt
 from controlnet_mcp.server import SERVER_INSTRUCTIONS, build_server
-
-MODEL_NAMES = (
-    "Zoe",
-    "MLSD",
-    "SAM",
-    "BAE",
-    "BEiT",
-    "Canny",
-    "ControlNet",
-    "SIFT",
-    "MAGSAC",
-    "RANSAC",
-)
 
 pytestmark = pytest.mark.anyio
 
@@ -185,16 +173,93 @@ async def test_analyze_schema_has_box_and_point(client: Client) -> None:
     assert "segments" in tools["analyze_image"].description
 
 
+def schema_descriptions(schema: object) -> list[str]:
+    """Every description in a JSON schema, at any depth, nested models included."""
+    if isinstance(schema, list):
+        return [text for item in schema for text in schema_descriptions(item)]
+    if not isinstance(schema, dict):
+        return []
+    found = schema_descriptions(list(schema.values()))
+    description = schema.get("description")
+    if isinstance(description, str):
+        found.append(description)
+    return found
+
+
 async def test_agent_facing_text_has_no_model_names(client: Client) -> None:
-    texts = [SERVER_INSTRUCTIONS, *(spec.description for spec in PROCESSORS.values())]
+    texts = [SERVER_INSTRUCTIONS]
+    for spec in PROCESSORS.values():
+        texts += [spec.description, spec.use_when, spec.values_description or ""]
     for tool in (await client.list_tools()).tools:
         texts.append(tool.description or "")
-        for field in tool.input_schema["properties"].values():
-            texts.append(field.get("description", ""))
+        texts += schema_descriptions(tool.input_schema)
+        texts += schema_descriptions(tool.output_schema)
 
     for text in texts:
-        for name in MODEL_NAMES:
-            assert name not in text, f"{name!r} appears in agent-facing text: {text[:80]}"
+        assert model_names_in_test_text(text) == [], f"in agent-facing text: {text[:80]}"
+
+
+async def test_schema_descriptions_reach_the_fields_of_a_returned_model(client: Client) -> None:
+    """The model-name check reads output fields, which sit in nested definitions."""
+    tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    descriptions = schema_descriptions(tools["sample_analysis"].output_schema)
+
+    sample = tools["sample_analysis"].output_schema["$defs"]["Sample"]
+    assert sample["properties"]["on_boundary"]["description"] in descriptions
+
+
+async def test_analysis_result_text_has_no_model_names(settings: Settings) -> None:
+    """The analysis is asked for by the name "canny", in lower case, and the text repeats it."""
+    for mode in ("off", "brief", "full"):
+        async with client_measuring(settings, mode) as client:
+            result = await client.call_tool(
+                "analyze_image", {"filename": "chair.png", "analysis": "canny", "resolution": 64}
+            )
+
+        text = result.content[0]
+        assert isinstance(text, TextContent)
+        assert model_names_in_test_text(text.text) == [], mode
+
+
+async def test_comparison_result_text_has_no_model_names(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both outcomes: paired in a shared frame, and an alignment withheld for lack of features."""
+    fake_test_line_detection(monkeypatch)
+
+    for mode in ("off", "brief", "full"):
+        for align in ("none", "fit"):
+            async with client_measuring(settings, mode) as client:
+                result = await client.call_tool(
+                    "compare_images",
+                    {"first": "chair.png", "second": "chair.png", "align": align},
+                )
+
+            text = result.content[0]
+            assert isinstance(text, TextContent)
+            assert model_names_in_test_text(text.text) == [], f"{mode}, align {align}"
+
+
+async def test_error_text_has_no_model_names(client: Client) -> None:
+    """Errors over what was asked for. A missing checkpoint is apart: its error names the file."""
+    results = [
+        await client.call_tool(
+            "analyze_image",
+            {"filename": "chair.png", "analysis": "perspective", "line_length": "long"},
+        ),
+        await client.call_tool(
+            "compare_images", {"first": "chair.png", "second": "table.jpg", "align": "none"}
+        ),
+        await client.call_tool(
+            "sample_analysis",
+            {"filename": "chair.png", "analysis": "canny", "points": [[0.5, 0.5]]},
+        ),
+    ]
+
+    for result in results:
+        assert result.is_error is True
+        assert model_names_in_test_text(result.content[0].text) == []
 
 
 async def test_analyze_schema_has_crop(client: Client) -> None:

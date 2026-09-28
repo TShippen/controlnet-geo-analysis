@@ -7,7 +7,7 @@ import dataclasses
 
 import numpy as np
 
-from conftest import camera_scene_test_segments
+from conftest import camera_scene_test_segments, model_names_in_test_text
 from controlnet_mcp.comparison import Alignment, EdgePair, Pairing, identity_alignment
 from controlnet_mcp.evidence import Withheld
 from controlnet_mcp.measurements import (
@@ -729,6 +729,33 @@ def test_mask_full_has_centroid() -> None:
     full = measure_mask(mask).full
 
     assert "centroid (0.38, 0.50)" in full
+
+
+def test_measurement_text_has_no_model_names() -> None:
+    """One measurement of each kind, with the comparison fitted, ambiguous, and withheld."""
+    first, second, pairing = comparison_test_rows([2.0, 8.0])
+    sizes = ((256, 256), (256, 256))
+    scene = analyze_perspective(camera_scene_test_segments(), 512, 512, cropped=False)
+    mask = np.zeros((8, 8), dtype=bool)
+    mask[2:6, 1:5] = True
+    measurements = [
+        measure_depth(np.tile(np.arange(0, 256, 16, dtype=np.uint8), (16, 1))),
+        measure_normals(np.full((8, 8, 3), FACING_CAMERA, dtype=np.uint8)),
+        measure_edges(np.zeros((4, 4), dtype=np.uint8), edges_are_dark=False),
+        measure_lines([(0.0, 0.0, 30.0, 0.0)], 100, 100),
+        measure_mask(mask),
+        measure_perspective(scene, 512, 512, edge_limit=len(camera_scene_test_segments())),
+        measure_perspective(perspective_test_result(), 512, 512),
+        measure_comparison(comparison_test_alignment(), pairing, first, second, *sizes),
+        measure_comparison(
+            comparison_test_alignment(ambiguous=True), pairing, first, second, *sizes
+        ),
+        measure_comparison(Withheld("a test"), None, first, second, *sizes, edge_limit=2),
+    ]
+
+    for measurement in measurements:
+        assert model_names_in_test_text(measurement.brief) == []
+        assert model_names_in_test_text(measurement.full) == []
 
 
 def test_mask_empty() -> None:

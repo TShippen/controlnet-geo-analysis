@@ -53,6 +53,9 @@ PAIR_DISTANCE_SHARE = 0.05
 # Pixels. Each endpoint is placed to about 1 pixel, on each of the two edges
 # being compared.
 COLLINEAR_PIXELS = 2.0
+# Pixels from the origin past which an edge is left out of the drawing. A
+# transform can send an endpoint toward infinity, and the drawing takes
+# coordinates as 32-bit integers, which a million pixels stays well inside.
 DRAWABLE_PIXELS = 1e6
 BACKGROUND_BRIGHTNESS = 0.4
 FIRST_COLOR = (0, 255, 255)
